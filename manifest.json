@@ -1,0 +1,65 @@
+{
+  "manifest_version": 3,
+  "name": "Naver Blog Exporter for NotebookLM",
+  "version": "1.0.0",
+  "description": "네이버 모바일 블로그 본문을 NotebookLM 최적화 마크다운으로 추출하여 복사 및 다운로드합니다.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "tabs",
+    "storage",
+    "debugger"
+  ],
+  "host_permissions": [
+    "*://m.blog.naver.com/*",
+    "*://blog.naver.com/*",
+    "*://cafe.naver.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "commands": {
+    "extract-text": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "네이버 블로그 텍스트 추출 및 복사"
+    },
+    "capture-page": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "전체 페이지 스크롤 캡처"
+    },
+    "save-html": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+H",
+        "mac": "Command+Shift+H"
+      },
+      "description": "현재 페이지 HTML 파일 저장"
+    },
+    "save-pdf": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+P",
+        "mac": "Command+Shift+P"
+      },
+      "description": "현재 페이지 PDF 파일 저장"
+    }
+  }
+}

@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Naver Blog Exporter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* Premium CSS variables & Reset */
+    :root {
+      --bg-dark: #0b0f19;
+      --card-bg: rgba(255, 255, 255, 0.04);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent-naver: #03c75a;
+      --accent-glow: #10b981;
+      --text-main: #f3f4f6;
+      --text-sub: #9ca3af;
+      --text-muted: #6b7280;
+      --danger: #ef4444;
+      --font-family: 'Outfit', sans-serif;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      width: 360px;
+      font-family: var(--font-family);
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      overflow-x: hidden;
+      padding: 16px;
+    }
+    
+    /* Sleek scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+    
+    /* Header layout */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    
+    .header-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      box-shadow: 0 0 12px rgba(3, 199, 90, 0.3);
+    }
+    
+    .header-info h1 {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      background: linear-gradient(135deg, #ffffff 30%, #03c75a 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .header-info p {
+      font-size: 11px;
+      color: var(--text-sub);
+      font-weight: 300;
+    }
+    
+    /* Card design - Glassmorphism */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      transition: border-color 0.2s ease, transform 0.2s ease;
+    }
+    
+    .card:hover {
+      border-color: rgba(3, 199, 90, 0.2);
+    }
+    
+    .card-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-sub);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    
+    .badge-success {
+      background: rgba(3, 199, 90, 0.15);
+      color: var(--accent-naver);
+      border: 1px solid rgba(3, 199, 90, 0.3);
+    }
+    
+    .badge-error {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    
+    /* Detail list inside cards */
+    .detail-info {
+      margin-bottom: 16px;
+    }
+    
+    .detail-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .detail-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    
+    .detail-value {
+      font-size: 12px;
+      color: var(--text-main);
+      font-weight: 400;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    /* Buttons */
+    .btn {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: none;
+      font-family: var(--font-family);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-naver) 0%, var(--accent-glow) 100%);
+      color: #0b0f19;
+      box-shadow: 0 4px 12px rgba(3, 199, 90, 0.2);
+    }
+    
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(3, 199, 90, 0.3);
+    }
+    
+    .btn-primary:active {
+      transform: translateY(0);
+    }
+    
+    .btn-primary:disabled {
+      background: var(--card-border);
+      color: var(--text-muted);
+      box-shadow: none;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--text-main);
+    }
+    
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    
+    .btn-secondary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    /* Toast notifications */
+    .toast-container {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      right: 16px;
+      z-index: 100;
+      pointer-events: none;
+    }
+    
+    .toast {
+      background: rgba(11, 15, 25, 0.95);
+      border: 1px solid var(--accent-naver);
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      transform: translateY(20px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    
+    .toast-error {
+      border-color: var(--danger);
+    }
+    
+    .toast-message {
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    /* Loader inside button */
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: none;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    /* Auto Comment Styles */
+    .textarea-json {
+      width: 100%;
+      height: 110px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: var(--text-main);
+      font-family: monospace;
+      font-size: 11px;
+      line-height: 1.4;
+      resize: vertical;
+      margin-bottom: 10px;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .textarea-json:focus {
+      outline: none;
+      border-color: var(--accent-naver);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .settings-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .setting-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-sub);
+      cursor: pointer;
+    }
+    .checkbox-custom {
+      accent-color: var(--accent-naver);
+      cursor: pointer;
+      width: 14px;
+      height: 14px;
+    }
+    .input-number-custom {
+      width: 52px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 3px 6px;
+      color: var(--text-main);
+      font-family: var(--font-family);
+      font-size: 12px;
+      text-align: center;
+    }
+    .input-number-custom:focus {
+      outline: none;
+      border-color: var(--accent-naver);
+    }
+    .progress-status {
+      font-size: 11px;
+      color: var(--text-sub);
+      margin-top: 10px;
+      text-align: center;
+      line-height: 1.4;
+    }
+    
+    /* Tab Opener Styles */
+    .input-text-custom {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      color: var(--text-main);
+      font-family: var(--font-family);
+      font-size: 11px;
+      margin-top: 4px;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .input-text-custom:focus {
+      outline: none;
+      border-color: var(--accent-naver);
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .range-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 8px;
+      margin-bottom: 4px;
+    }
+    .input-number-range {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      color: var(--text-main);
+      font-family: var(--font-family);
+      font-size: 12px;
+      text-align: center;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .input-number-range:focus {
+      outline: none;
+      border-color: var(--accent-naver);
+      background: rgba(255, 255, 255, 0.06);
+    }
+    
+    /* Tab Switcher Styles */
+    .tabs-nav {
+      display: flex;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 4px;
+      margin-bottom: 16px;
+      gap: 4px;
+    }
+    
+    .tab-nav-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: var(--text-sub);
+      font-family: var(--font-family);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: center;
+    }
+    
+    .tab-nav-btn:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    
+    .tab-nav-btn.active {
+      background: rgba(3, 199, 90, 0.12);
+      color: #03c75a;
+      font-weight: 600;
+      border: 1px solid rgba(3, 199, 90, 0.2);
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.25s ease-out;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .detail-row-horizontal {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .detail-row-horizontal .detail-value {
+      max-width: 75%;
+      text-align: right;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Compact Layout styling */
+    .card-compact {
+      padding: 10px 12px !important;
+      margin-bottom: 10px !important;
+    }
+    .card-compact .card-title {
+      margin-bottom: 6px !important;
+    }
+    .card-compact .detail-info {
+      margin-bottom: 8px !important;
+    }
+    .card-compact .btn {
+      padding: 8px 12px !important;
+      font-size: 12px !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="icons/icon-48.png" alt="Logo" class="header-logo">
+    <div class="header-info">
+      <h1>Naver Blog Exporter</h1>
+      <p>NotebookLM Text Extractor (Manifest V3)</p>
+    </div>
+  </div>
+
+  <!-- Segmented Tab Switcher -->
+  <div class="tabs-nav">
+    <button class="tab-nav-btn active" id="tab-btn-blog">블로그 & 일반</button>
+    <button class="tab-nav-btn" id="tab-btn-cafe">네이버 카페</button>
+  </div>
+
+  <!-- Blog & General Tab Content -->
+  <div id="container-blog" class="tab-content active">
+    <!-- Single Tab Card -->
+    <div class="card card-compact" id="active-card">
+      <div class="card-title">
+        <span>현재 탭 추출</span>
+        <span class="badge" id="active-status-badge">확인 중...</span>
+      </div>
+      <div class="detail-info">
+        <div class="detail-row-horizontal" style="margin-bottom: 4px;">
+          <span class="detail-label">제목</span>
+          <span class="detail-value" id="active-title">-</span>
+        </div>
+        <div class="detail-row-horizontal">
+          <span class="detail-label">URL</span>
+          <span class="detail-value" id="active-url">-</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <button class="btn btn-primary" id="copy-btn" disabled style="padding: 9px 12px; font-size: 13px;">
+          <span class="spinner" id="copy-spinner"></span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          <span>텍스트 복사</span>
+        </button>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary" id="html-save-btn" disabled style="flex: 1; padding: 8px 8px; font-size: 12px;">
+            <span class="spinner" id="html-save-spinner"></span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <span>HTML 저장</span>
+          </button>
+          <button class="btn btn-secondary" id="pdf-save-btn" disabled style="flex: 1; padding: 8px 8px; font-size: 12px;">
+            <span class="spinner" id="pdf-save-spinner"></span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+            <span>PDF 저장</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Batch Mode Card -->
+    <div class="card card-compact" id="batch-card">
+      <div class="card-title">
+        <span>일괄 추출 (Batch Mode)</span>
+      </div>
+      <div class="detail-info">
+        <div class="detail-row-horizontal">
+          <span class="detail-label">감지된 네이버 블로그 탭</span>
+          <span class="detail-value" id="batch-count">0개 탭 감지됨</span>
+        </div>
+      </div>
+      <button class="btn btn-secondary" id="batch-btn" disabled>
+        <span class="spinner" id="batch-spinner"></span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        <span>일괄 다운로드 (.txt)</span>
+      </button>
+    </div>
+
+    <!-- Screenshot Mode Card -->
+    <div class="card card-compact" id="screenshot-card">
+      <div class="card-title">
+        <span>웹페이지 캡처 (Screenshot Mode)</span>
+      </div>
+      <div class="detail-info">
+        <div class="detail-row-horizontal">
+          <span class="detail-label">대상</span>
+          <span class="detail-value" id="screenshot-target">현재 활성화된 탭</span>
+        </div>
+      </div>
+      <button class="btn btn-secondary" id="screenshot-btn">
+        <span class="spinner" id="screenshot-spinner"></span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+        <span>전체 페이지 캡처 (.png)</span>
+      </button>
+    </div>
+
+    <!-- Image Downloader Card -->
+    <div class="card card-compact" id="image-download-card">
+      <div class="card-title">
+        <span>이미지 추출 (Image Downloader)</span>
+      </div>
+      <div class="detail-info">
+        <div class="detail-row-horizontal">
+          <span class="detail-label">대상 이미지 수</span>
+          <span class="detail-value" id="image-count">0개 감지됨</span>
+        </div>
+      </div>
+      <button class="btn btn-secondary" id="image-download-btn" disabled>
+        <span class="spinner" id="image-download-spinner"></span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        <span>모든 이미지 다운로드</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Naver Cafe Tab Content -->
+  <div id="container-cafe" class="tab-content">
+    <!-- Tab Opener Mode Card -->
+    <div class="card" id="tab-opener-card">
+      <div class="card-title">
+        <span>카페 탭 일괄 열기 (Tab Opener)</span>
+      </div>
+      <div class="detail-info">
+        <div class="detail-row" style="margin-bottom: 8px;">
+          <span class="detail-label">대상 URL 템플릿 (변화할 숫자 자리에 [NUM] 입력)</span>
+          <input type="text" id="tab-opener-template" class="input-text-custom" value="https://cafe.naver.com/ca-fe/cafes/25228091/articles/[NUM]?referrerAllArticles=true&fromNext=true" placeholder="">
+        </div>
+        <div class="range-row">
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+            <span class="detail-label">시작 번호</span>
+            <input type="number" id="tab-opener-start" class="input-number-range" value="" min="1">
+          </div>
+          <span style="font-size: 16px; color: var(--text-muted); align-self: flex-end; margin-bottom: 6px;">~</span>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+            <span class="detail-label">끝 번호</span>
+            <input type="number" id="tab-opener-end" class="input-number-range" value="" min="1">
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-secondary" id="tab-opener-btn">
+        <span class="spinner" id="tab-opener-spinner"></span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+        <span>탭 일괄 열기 실행</span>
+      </button>
+    </div>
+
+    <!-- Naver Cafe Mode Card -->
+    <div class="card" id="cafe-card">
+      <div class="card-title">
+        <span>네이버 카페 글 추출 (Cafe Mode)</span>
+      </div>
+      <div class="detail-info">
+        <div class="detail-row">
+          <span class="detail-label">감지된 네이버 카페 탭</span>
+          <span class="detail-value" id="cafe-count">0개 탭 감지됨</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-primary" id="cafe-copy-btn" disabled style="flex: 1; padding: 10px 8px;">
+          <span class="spinner" id="cafe-copy-spinner"></span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          <span>텍스트 복사</span>
+        </button>
+        <button class="btn btn-secondary" id="cafe-save-btn" disabled style="flex: 1; padding: 10px 8px;">
+          <span class="spinner" id="cafe-save-spinner"></span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          <span>파일로 저장</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Auto Comment Mode Card -->
+    <div class="card" id="auto-comment-card">
+      <div class="card-title">
+        <span>댓글 일괄 자동 입력 (Auto Comment)</span>
+        <span class="badge badge-success" id="comment-count-badge" style="display: none;">0개 매칭</span>
+      </div>
+      <div class="detail-info">
+        <div class="detail-row" style="margin-bottom: 8px;">
+          <span class="detail-label">매칭 상태</span>
+          <span class="detail-value" id="comment-match-status">감지된 카페 탭: 0개 / 입력된 댓글: 0개</span>
+        </div>
+      </div>
+      
+      <textarea class="textarea-json" id="comment-json-input" placeholder='{
+  "txt1": "첫 번째 카페 글에 입력할 댓글 내용...",
+  "txt2": "두 번째 카페 글에 입력할 댓글 내용..."
+}'></textarea>
+
+      <div class="settings-row">
+        <label class="setting-item">
+          <input type="checkbox" id="comment-auto-submit" class="checkbox-custom">
+          <span>자동 등록 (등록 버튼 클릭)</span>
+        </label>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span style="font-size: 12px; color: var(--text-sub);">간격 (초):</span>
+          <input type="number" id="comment-delay" class="input-number-custom" value="1.5" min="0.5" max="10.0" step="0.5">
+        </div>
+      </div>
+
+      <button class="btn btn-primary" id="comment-auto-btn" disabled>
+        <span class="spinner" id="comment-auto-spinner"></span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <span>댓글 일괄 자동 입력 실행</span>
+      </button>
+      
+      <div class="progress-status" id="comment-progress-status" style="display: none;">대기 중...</div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container">
+    <div class="toast" id="toast">
+      <span class="toast-message" id="toast-text"></span>
+    </div>
+  </div>
+
+  <script src="popup.js" defer></script>
+</body>
+</html>
