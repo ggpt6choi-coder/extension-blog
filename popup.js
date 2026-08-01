@@ -947,6 +947,32 @@ ${cleanedText}
   }
 
   // --- Naver Cafe Exporter Feature ---
+  // Helper to clean extracted cafe post text (remove empty lines & widget noise)
+  function cleanCafeText(text) {
+    if (!text) return '';
+    const lines = text.split(/\r?\n/);
+    const cleanedLines = [];
+    
+    for (let line of lines) {
+      const trimmed = line.trim();
+      
+      // Skip empty lines
+      if (!trimmed) continue;
+      
+      // Skip Naver map widget boilerplate / noise lines
+      if (trimmed.includes('NAVER Corp.') || 
+          trimmed.includes('OpenStreetMap') || 
+          trimmed.includes('지도 컨트롤러') || 
+          trimmed.includes('범례부동산거리')) {
+        continue;
+      }
+      
+      cleanedLines.push(trimmed);
+    }
+    
+    return cleanedLines.join('\n');
+  }
+
   // Helper to fetch and parse cafe posts
   async function fetchAndExtractCafePosts() {
     const cafeTabs = await chrome.tabs.query({
@@ -969,12 +995,14 @@ ${cleanedText}
         const injectionResults = await chrome.scripting.executeScript({
           target: { tabId: tab.id, allFrames: true },
           func: () => {
-            const titleElement = document.querySelector('.title_area .title_text');
-            const contentElement = document.querySelector('.se-main-container');
+            const titleElement = document.querySelector('.title_area .title_text') || document.querySelector('.ArticleTitle .title_text') || document.querySelector('.b-title');
+            const contentElement = document.querySelector('.se-main-container') || document.querySelector('#ContentRenderer') || document.querySelector('.article_viewer');
             if (titleElement || contentElement) {
+              const titleText = titleElement ? titleElement.textContent : '';
+              const contentText = contentElement ? (contentElement.innerText || contentElement.textContent) : '';
               return {
-                title: titleElement ? titleElement.textContent.trim() : '제목을 찾을 수 없습니다.',
-                content: contentElement ? contentElement.textContent.trim() : '본문을 찾을 수 없습니다.'
+                title: titleText,
+                content: contentText
               };
             }
             return null;
@@ -985,7 +1013,7 @@ ${cleanedText}
         let extracted = null;
         if (injectionResults && injectionResults.length > 0) {
           for (const res of injectionResults) {
-            if (res.result) {
+            if (res.result && (res.result.title || res.result.content)) {
               extracted = res.result;
               break;
             }
@@ -993,10 +1021,13 @@ ${cleanedText}
         }
 
         if (extracted) {
+          const rawTitle = (extracted.title || '').trim() || '제목을 찾을 수 없습니다.';
+          const cleanedContent = cleanCafeText(extracted.content);
+
           results.push({
             success: true,
-            title: extracted.title,
-            content: extracted.content,
+            title: rawTitle,
+            content: cleanedContent || '본문을 찾을 수 없습니다.',
             url: tab.url
           });
         } else {
