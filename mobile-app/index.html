@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Naver Blog Exporter &mdash; Mobile</title>
+  <meta name="description" content="네이버 블로그 본문을 NotebookLM 최적화 마크다운으로 추출합니다.">
+  <meta name="theme-color" content="#0b0f19">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0b0f19;
+      --bg-card: rgba(255,255,255,0.04);
+      --border: rgba(255,255,255,0.08);
+      --accent: #03c75a;
+      --accent-glow: #10b981;
+      --accent-dim: rgba(3,199,90,0.12);
+      --text-main: #f3f4f6;
+      --text-sub: #9ca3af;
+      --text-muted: #6b7280;
+      --danger: #ef4444;
+      --danger-dim: rgba(239,68,68,0.12);
+      --warn-dim: rgba(251,191,36,0.1);
+      --font: 'Outfit', -apple-system, sans-serif;
+      --radius: 14px;
+      --radius-sm: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { -webkit-text-size-adjust: 100%; }
+    body { font-family: var(--font); background: var(--bg-dark); color: var(--text-main); min-height: 100dvh; padding: env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0); }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+    .app-wrapper { max-width: 480px; margin: 0 auto; padding: 20px 16px 40px; }
+
+    /* Header */
+    .header { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+    .header-icon { width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, var(--accent) 0%, var(--accent-glow) 100%); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px rgba(3,199,90,0.35); flex-shrink: 0; }
+    .header-icon svg { width: 22px; height: 22px; color: #0b0f19; }
+    .header-text h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; background: linear-gradient(135deg, #fff 30%, #03c75a 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .header-text p { font-size: 12px; color: var(--text-muted); font-weight: 300; margin-top: 2px; }
+
+    /* Card */
+    .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: border-color 0.2s; }
+    .card:focus-within { border-color: rgba(3,199,90,0.3); }
+    .card-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .card-label-left { display: flex; align-items: center; gap: 6px; }
+
+    /* URL Count Badge */
+    .url-count-badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(3,199,90,0.25); display: none; }
+    .url-count-badge.visible { display: inline-block; }
+
+    /* Textarea for URLs */
+    .url-textarea {
+      width: 100%; height: 130px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      color: var(--text-main);
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.7;
+      resize: vertical;
+      transition: border-color 0.2s, background 0.2s;
+      -webkit-appearance: none;
+    }
+    .url-textarea::placeholder { color: var(--text-muted); font-family: var(--font); font-size: 12px; line-height: 1.7; }
+    .url-textarea:focus { outline: none; border-color: var(--accent); background: rgba(255,255,255,0.06); }
+
+    /* Extract Button */
+    .btn-extract { width: 100%; margin-top: 12px; padding: 15px; background: linear-gradient(135deg, var(--accent) 0%, var(--accent-glow) 100%); color: #0b0f19; border: none; border-radius: var(--radius-sm); font-family: var(--font); font-size: 15px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 4px 16px rgba(3,199,90,0.25); transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s; -webkit-tap-highlight-color: transparent; }
+    .btn-extract:active { transform: scale(0.97); }
+    .btn-extract:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+    /* Spinner */
+    .spinner { width: 16px; height: 16px; border: 2px solid rgba(11,15,25,0.3); border-top-color: #0b0f19; border-radius: 50%; animation: spin 0.75s linear infinite; display: none; flex-shrink: 0; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner.active { display: block; }
+
+    /* Progress list */
+    .progress-list { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+    .progress-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: rgba(255,255,255,0.02); font-size: 12px; transition: background 0.2s, border-color 0.2s; }
+    .progress-item.loading { border-color: rgba(99,102,241,0.25); background: rgba(99,102,241,0.07); }
+    .progress-item.done { border-color: rgba(3,199,90,0.25); background: rgba(3,199,90,0.06); }
+    .progress-item.fail { border-color: rgba(239,68,68,0.25); background: var(--danger-dim); }
+    .progress-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
+    .progress-item.loading .progress-dot { background: #818cf8; animation: pulse 1s infinite; }
+    .progress-item.done .progress-dot { background: var(--accent); }
+    .progress-item.fail .progress-dot { background: var(--danger); }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .progress-label { flex: 1; color: var(--text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .progress-item.loading .progress-label { color: #a5b4fc; }
+    .progress-item.done .progress-label { color: var(--text-main); }
+    .progress-item.fail .progress-label { color: #fca5a5; }
+    .progress-status-text { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+    .progress-item.done .progress-status-text { color: var(--accent); }
+    .progress-item.fail .progress-status-text { color: var(--danger); }
+
+    /* Summary bar */
+    .summary-bar { margin-top: 12px; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; display: none; align-items: center; gap: 8px; }
+    .summary-bar.visible { display: flex; }
+    .summary-bar.all-ok { background: var(--accent-dim); border: 1px solid rgba(3,199,90,0.25); color: var(--accent); }
+    .summary-bar.partial { background: var(--warn-dim); border: 1px solid rgba(251,191,36,0.25); color: #fbbf24; }
+    .summary-bar.all-fail { background: var(--danger-dim); border: 1px solid rgba(239,68,68,0.25); color: #fca5a5; }
+
+    /* Result */
+    @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+    .result-section { display: none; animation: fadeSlideIn 0.35s ease-out; }
+    .result-section.visible { display: block; }
+    .result-meta { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; padding: 12px 14px; background: rgba(3,199,90,0.06); border: 1px solid rgba(3,199,90,0.15); border-radius: var(--radius-sm); }
+    .meta-row { display: flex; gap: 8px; align-items: center; }
+    .meta-key { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; min-width: 46px; flex-shrink: 0; }
+    .meta-val { font-size: 13px; color: var(--text-sub); line-height: 1.4; word-break: break-all; }
+    .meta-val strong { color: var(--accent); }
+
+    .result-textarea { width: 100%; min-height: 240px; max-height: 420px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--text-main); font-family: monospace; font-size: 12px; line-height: 1.65; resize: vertical; transition: border-color 0.2s; -webkit-appearance: none; }
+    .result-textarea:focus { outline: none; border-color: rgba(3,199,90,0.3); }
+    .char-count { font-size: 11px; color: var(--text-muted); text-align: right; margin-top: 6px; }
+
+    /* Action Buttons */
+    .action-row { display: flex; gap: 10px; margin-top: 14px; }
+    .btn-action { flex: 1; padding: 13px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: rgba(255,255,255,0.05); color: var(--text-main); font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: background 0.15s, border-color 0.15s, transform 0.1s; -webkit-tap-highlight-color: transparent; }
+    .btn-action:active { transform: scale(0.96); }
+    .btn-action.primary { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-glow) 100%); border-color: transparent; color: #0b0f19; box-shadow: 0 3px 10px rgba(3,199,90,0.2); }
+    .btn-action:not(.primary):hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.15); }
+    @keyframes copyFlash { 0% { background: rgba(3,199,90,0.3); border-color: var(--accent); } 100% { background: rgba(255,255,255,0.05); border-color: var(--border); } }
+    .btn-action.copied { animation: copyFlash 0.6s ease-out forwards; }
+
+    /* How-to */
+    .howto-card { background: rgba(99,102,241,0.06); border: 1px solid rgba(99,102,241,0.15); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; }
+    .howto-title { font-size: 11px; font-weight: 600; color: #818cf8; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .howto-steps { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+    .howto-step { display: flex; gap: 10px; align-items: flex-start; }
+    .step-num { width: 20px; height: 20px; border-radius: 50%; background: rgba(99,102,241,0.2); border: 1px solid rgba(99,102,241,0.3); color: #a5b4fc; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .step-text { font-size: 12px; color: var(--text-sub); line-height: 1.5; padding-top: 1px; }
+    .step-text strong { color: var(--text-main); font-weight: 500; }
+
+    /* Note */
+    .proxy-note { font-size: 11px; color: var(--text-muted); display: flex; align-items: flex-start; gap: 6px; padding: 10px 12px; background: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid var(--border); margin-top: 10px; line-height: 1.5; }
+    .footer { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border); line-height: 1.6; }
+
+    /* Worker setup card */
+    .worker-card { background: rgba(3,199,90,0.04); border: 1px solid rgba(3,199,90,0.18); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; }
+    .worker-card.configured { background: rgba(3,199,90,0.07); border-color: rgba(3,199,90,0.3); }
+    .worker-title { font-size: 11px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .worker-title-left { display: flex; align-items: center; gap: 6px; }
+    .worker-status { font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+    .worker-status.ok { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(3,199,90,0.3); }
+    .worker-status.none { background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border); }
+    .worker-input-row { display: flex; gap: 8px; }
+    .worker-url-input { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; color: var(--text-main); font-family: monospace; font-size: 11px; transition: border-color 0.2s; -webkit-appearance: none; }
+    .worker-url-input::placeholder { color: var(--text-muted); font-family: var(--font); }
+    .worker-url-input:focus { outline: none; border-color: var(--accent); }
+    .btn-worker-save { padding: 10px 14px; border-radius: var(--radius-sm); border: none; background: var(--accent); color: #0b0f19; font-family: var(--font); font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; -webkit-tap-highlight-color: transparent; transition: opacity 0.15s; flex-shrink: 0; }
+    .btn-worker-save:active { opacity: 0.8; }
+    .worker-desc { font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.6; }
+    .worker-desc a { color: var(--accent); text-decoration: none; }
+    .worker-desc strong { color: var(--text-sub); }
+  </style>
+</head>
+<body>
+  <div class="app-wrapper">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="header-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+      </div>
+      <div class="header-text">
+        <h1>Naver Blog Exporter</h1>
+        <p>모바일용 &middot; NotebookLM 텍스트 추출기</p>
+      </div>
+    </div>
+
+    <!-- How-to -->
+    <div class="howto-card">
+      <div class="howto-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        사용 방법
+      </div>
+      <ol class="howto-steps">
+        <li class="howto-step"><span class="step-num">1</span><span class="step-text">네이버 블로그 글 URL을 복사하고, 아래 입력창에 <strong>한 줄에 하나씩</strong> 붙여넣습니다</span></li>
+        <li class="howto-step"><span class="step-num">2</span><span class="step-text"><strong>추출 버튼</strong>을 누르면 URL을 순서대로 처리합니다</span></li>
+        <li class="howto-step"><span class="step-num">3</span><span class="step-text">모든 글이 <strong>하나로 합쳐진</strong> 텍스트를 복사해서 NotebookLM에 붙여넣으세요</span></li>
+      </ol>
+    </div>
+
+    <!-- Worker URL Setup -->
+    <div class="worker-card" id="worker-card">
+      <div class="worker-title">
+        <span class="worker-title-left">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          내 Cloudflare Worker 프록시
+        </span>
+        <span class="worker-status none" id="worker-status">미설정</span>
+      </div>
+      <div class="worker-input-row">
+        <input type="url" id="worker-url-input" class="worker-url-input"
+          placeholder="https://naver-proxy.your-id.workers.dev"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <button class="btn-worker-save" id="worker-save-btn">저장</button>
+      </div>
+      <p class="worker-desc">
+        설정하면 공개 프록시 대신 <strong>내 Worker를 최우선</strong>으로 사용합니다.<br>
+        아직 없다면 아래 배포 가이드를 참고하세요 &rarr; <a href="https://dash.cloudflare.com/" target="_blank">Cloudflare 대시보드</a>
+      </p>
+    </div>
+
+    <!-- Input Card -->
+    <div class="card">
+      <div class="card-label">
+        <span class="card-label-left">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          네이버 블로그 URL 목록
+        </span>
+        <span class="url-count-badge" id="url-count-badge"></span>
+      </div>
+
+      <textarea
+        id="url-textarea"
+        class="url-textarea"
+        placeholder="https://blog.naver.com/user/123456789&#10;https://blog.naver.com/user/987654321&#10;https://m.blog.naver.com/user/111222333&#10;&#10;(한 줄에 URL 하나씩 입력)"
+        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+      ></textarea>
+
+      <button class="btn-extract" id="extract-btn" disabled>
+        <div class="spinner" id="extract-spinner"></div>
+        <svg id="extract-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <span id="extract-label">텍스트 추출하기</span>
+      </button>
+
+      <!-- Per-URL progress list -->
+      <div class="progress-list" id="progress-list"></div>
+
+      <!-- Summary bar -->
+      <div class="summary-bar" id="summary-bar">
+        <span id="summary-text"></span>
+      </div>
+
+      <div class="proxy-note">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>공개 게시글만 추출 가능합니다. 비공개 / 이웃 공개 글은 추출되지 않습니다.</span>
+      </div>
+    </div>
+
+    <!-- Result Section -->
+    <div class="result-section" id="result-section">
+      <div class="card">
+        <div class="card-label">
+          <span class="card-label-left">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            추출 결과
+          </span>
+        </div>
+
+        <div class="result-meta">
+          <div class="meta-row">
+            <span class="meta-key">건수</span>
+            <span class="meta-val" id="result-count">-</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-key">글자수</span>
+            <span class="meta-val" id="result-chars">-</span>
+          </div>
+        </div>
+
+        <textarea class="result-textarea" id="result-textarea" readonly></textarea>
+        <div class="char-count" id="char-count"></div>
+
+        <div class="action-row">
+          <button class="btn-action primary" id="copy-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            전체 복사
+          </button>
+          <button class="btn-action" id="share-btn" style="display:none;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+            공유
+          </button>
+          <button class="btn-action" id="download-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            .txt 저장
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      Naver Blog Exporter &middot; 모바일 웹 버전<br>
+      데스크톱에서는 Chrome 확장 프로그램을 사용하세요
+    </div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    // ── Proxy fetch ────
+    // 프록시별 fetch 전략: [url => proxyUrl, responseParser]
+    const PROXY_CONFIGS = [
+      {
+        name: 'codetabs',
+        url: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+        parse: async (r) => r.text()
+      },
+      {
+        name: 'allorigins-get',
+        url: (u) => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+        parse: async (r) => { const j = await r.json(); return j.contents || ''; }
+      },
+      {
+        name: 'allorigins-raw',
+        url: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        parse: async (r) => r.text()
+      },
+      {
+        name: 'corsproxy',
+        url: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+        parse: async (r) => r.text()
+      },
+      {
+        name: 'thingproxy',
+        url: (u) => `https://thingproxy.freeboard.io/fetch/${u}`,
+        parse: async (r) => r.text()
+      }
+    ];
+
+    async function fetchWithProxy(url, onTry) {
+      const errors = [];
+      for (let i = 0; i < PROXY_CONFIGS.length; i++) {
+        const cfg = PROXY_CONFIGS[i];
+        if (onTry) onTry(i + 1, PROXY_CONFIGS.length, cfg.name);
+        try {
+          const r = await fetch(cfg.url(url), {
+            headers: { Accept: 'text/html,application/xhtml+xml,*/*' },
+            signal: AbortSignal.timeout(12000)
+          });
+          if (!r.ok) { errors.push(`${cfg.name}: HTTP ${r.status}`); continue; }
+          const text = await cfg.parse(r);
+          if (text && text.length > 300) return text;
+          errors.push(`${cfg.name}: 응답이 너무 짧음`);
+        } catch (e) {
+          errors.push(`${cfg.name}: ${e.message || '연결 실패'}`);
+          console.warn(`[${cfg.name}] failed:`, e);
+        }
+      }
+      throw new Error('모든 프록시 서버에서 실패했습니다.\n네이버가 해당 IP를 차단했거나 일시적인 오류일 수 있습니다. 잠시 후 다시 시도해 주세요.');
+    }
+
+    // ── Worker URL 설정 ─
+    const DEFAULT_WORKER = 'https://naver-blog-proxy.gusdn7269.workers.dev';
+    const WORKER_KEY = 'nbe_worker_url';
+    const workerCard = $('worker-card');
+    const workerUrlInput = $('worker-url-input');
+    const workerSaveBtn = $('worker-save-btn');
+    const workerStatusEl = $('worker-status');
+
+    function getWorkerUrl() { return localStorage.getItem(WORKER_KEY) || DEFAULT_WORKER; }
+
+    function applyWorkerUrl(url) {
+      if (url) {
+        workerUrlInput.value = url;
+        workerStatusEl.textContent = '설정됨';
+        workerStatusEl.className = 'worker-status ok';
+        workerCard.classList.add('configured');
+      } else {
+        workerStatusEl.textContent = '미설정';
+        workerStatusEl.className = 'worker-status none';
+        workerCard.classList.remove('configured');
+      }
+    }
+
+    // Load saved worker URL on startup
+    applyWorkerUrl(getWorkerUrl());
+
+    workerSaveBtn.addEventListener('click', () => {
+      const val = workerUrlInput.value.trim().replace(/\/$/, '');
+      if (val) {
+        localStorage.setItem(WORKER_KEY, val);
+        applyWorkerUrl(val);
+        workerSaveBtn.textContent = '저장됨 ✔';
+        setTimeout(() => { workerSaveBtn.textContent = '저장'; }, 1500);
+      } else {
+        localStorage.removeItem(WORKER_KEY);
+        applyWorkerUrl('');
+      }
+    });
+
+    // ── Updated fetchWithProxy: Worker 우선 ────
+    async function fetchWithProxy(url, onTry) {
+      const workerBase = getWorkerUrl();
+      const allConfigs = [];
+
+      // 1. 사용자 설정 Worker 우선
+      if (workerBase) {
+        allConfigs.push({
+          name: '나의 Worker',
+          url: (u) => `${workerBase}?url=${encodeURIComponent(u)}`,
+          parse: async (r) => r.text()
+        });
+      }
+
+      // 2. 공개 프록시 폴백
+      allConfigs.push(...PROXY_CONFIGS);
+
+      const errors = [];
+      for (let i = 0; i < allConfigs.length; i++) {
+        const cfg = allConfigs[i];
+        if (onTry) onTry(i + 1, allConfigs.length, cfg.name);
+        try {
+          const r = await fetch(cfg.url(url), {
+            headers: { Accept: 'text/html,application/xhtml+xml,*/*' },
+            signal: AbortSignal.timeout(12000)
+          });
+          if (!r.ok) { errors.push(`${cfg.name}: HTTP ${r.status}`); continue; }
+          const text = await cfg.parse(r);
+          if (text && text.length > 300) return text;
+          errors.push(`${cfg.name}: 응답이 너무 짧음`);
+        } catch (e) {
+          errors.push(`${cfg.name}: ${e.message || '연결 실패'}`);
+          console.warn(`[${cfg.name}] failed:`, e);
+        }
+      }
+
+      const workerHint = workerBase ? '' : '\n\u2192 Cloudflare Worker 설정 시 성공률이 높아집니다.';
+      throw new Error(`모든 프록시 실패\n네이버가 IP를 차단했거나 일시적인 오류입니다.${workerHint}`);
+    }
+    function isNaverBlog(url) {
+      try { const h = new URL(url).hostname; return h === 'm.blog.naver.com' || h === 'blog.naver.com'; }
+      catch { return false; }
+    }
+    function toMobile(url) {
+      try { const p = new URL(url); if (p.hostname === 'blog.naver.com') p.hostname = 'm.blog.naver.com'; return p.toString(); }
+      catch { return url; }
+    }
+    function getUrls() {
+      return urlTA.value.split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0 && isNaverBlog(l));
+    }
+
+    // ── Extract ─
+    function extractFromDoc(doc, srcUrl) {
+      const c = doc.querySelector('.se-main-container') || doc.querySelector('#viewTypeSelector') || doc.querySelector('.post_ct') || doc.querySelector('.se_doc_viewer');
+      if (!c) return { ok: false, err: '본문을 찾을 수 없음' };
+      return { ok: true, text: c.innerText || c.textContent || '', title: doc.title || '제목 없음', url: srcUrl };
+    }
+
+    const NOISE = ['이웃추가','본문 기타 기능','공유하기','URL복사','신고하기','이 블로그의 체크인','이 장소의 다른 글','Previous image','Next image','댓글','공감','인쇄','본문 폰트 크기 조정','본문 폰트 크기 작게 보기','본문 폰트 크기 크게 보기','가','내돈내산 인증','방문','영수증','더보기','외 1개'];
+
+    function format(text, title, url) {
+      const lines = text.split(/\r?\n/); const out = []; let pe = false;
+      for (const l of lines) {
+        const t = l.trim();
+        if (!t) { if (out.length && !pe) { out.push(''); pe = true; } continue; }
+        if (NOISE.some(k => t === k || (t.includes(k) && t.length < k.length + 5))) continue;
+        out.push(t); pe = false;
+      }
+      const d = new Date();
+      const dt = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      return `# ${title}\n\n- **출처**: ${url}\n- **수집일**: ${dt}\n\n---\n\n${out.join('\n').trim()}\n`;
+    }
+
+    // ── DOM refs 
+    
+    const urlTA = $('url-textarea');
+    const urlCountBadge = $('url-count-badge');
+    const extractBtn = $('extract-btn');
+    const extractSpinner = $('extract-spinner');
+    const extractIcon = $('extract-icon');
+    const extractLabel = $('extract-label');
+    const progressList = $('progress-list');
+    const summaryBar = $('summary-bar');
+    const summaryText = $('summary-text');
+    const resultSection = $('result-section');
+    const resultCount = $('result-count');
+    const resultChars = $('result-chars');
+    const resultTA = $('result-textarea');
+    const charCount = $('char-count');
+    const copyBtn = $('copy-btn');
+    const shareBtn = $('share-btn');
+    const downloadBtn = $('download-btn');
+
+    // ── Input sync ─────
+    function syncInput() {
+      const urls = getUrls();
+      const count = urls.length;
+      extractBtn.disabled = count === 0;
+      if (count > 0) {
+        urlCountBadge.textContent = `${count}개 URL`;
+        urlCountBadge.classList.add('visible');
+      } else {
+        urlCountBadge.classList.remove('visible');
+      }
+    }
+    urlTA.addEventListener('input', syncInput);
+    urlTA.addEventListener('paste', () => setTimeout(syncInput, 50));
+
+    // ── Progress item helpers ──
+    function createProgressItem(url) {
+      const short = url.replace(/^https?:\/\//, '').slice(0, 52);
+      const el = document.createElement('div');
+      el.className = 'progress-item loading';
+      el.innerHTML = `
+        <span class="progress-dot"></span>
+        <span class="progress-label">${short}</span>
+        <span class="progress-status-text">대기 중</span>`;
+      progressList.appendChild(el);
+      return el;
+    }
+    function updateProgressItem(el, state, statusMsg) {
+      el.className = `progress-item ${state}`;
+      el.querySelector('.progress-status-text').textContent = statusMsg;
+    }
+
+    // ── Loading state ───
+    function setLoading(on) {
+      extractBtn.disabled = on;
+      extractSpinner.classList.toggle('active', on);
+      extractIcon.style.display = on ? 'none' : 'inline';
+      extractLabel.textContent = on ? '추출 중...' : '텍스트 추출하기';
+    }
+
+    // ── Main extract ───
+    async function doExtract() {
+      const urls = getUrls();
+      if (urls.length === 0) return;
+
+      setLoading(true);
+      progressList.innerHTML = '';
+      summaryBar.className = 'summary-bar';
+      resultSection.classList.remove('visible');
+
+      const items = urls.map(url => ({ url, el: createProgressItem(url) }));
+      const results = [];
+      let doneCount = 0, failCount = 0;
+
+      for (let i = 0; i < items.length; i++) {
+        const { url, el } = items[i];
+        updateProgressItem(el, 'loading', `${i+1}/${urls.length} 처리 중`);
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+        try {
+          const mUrl = toMobile(url);
+          const html = await fetchWithProxy(mUrl, (cur, total, name) => {
+            updateProgressItem(el, 'loading', `프록시 ${cur}/${total} 시도 중`);
+          });
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const r = extractFromDoc(doc, mUrl);
+          if (r.ok) {
+            results.push(format(r.text, r.title, r.url));
+            updateProgressItem(el, 'done', '완료');
+            doneCount++;
+          } else {
+            updateProgressItem(el, 'fail', r.err);
+            failCount++;
+          }
+        } catch (e) {
+          updateProgressItem(el, 'fail', '실패');
+          failCount++;
+        }
+      }
+
+      // Show summary
+      summaryBar.classList.add('visible');
+      if (failCount === 0) {
+        summaryBar.className = 'summary-bar visible all-ok';
+        summaryText.textContent = `✅ 전체 ${doneCount}개 추출 완료`;
+      } else if (doneCount === 0) {
+        summaryBar.className = 'summary-bar visible all-fail';
+        summaryText.textContent = `❌ 전체 실패 (${failCount}개)`;
+      } else {
+        summaryBar.className = 'summary-bar visible partial';
+        summaryText.textContent = `⚠️ ${doneCount}개 성공, ${failCount}개 실패`;
+      }
+
+      if (results.length > 0) {
+        const combined = results.join('\n\n---\n\n');
+        resultTA.value = combined;
+        resultCount.innerHTML = `<strong>${doneCount}</strong>개 글 합산`;
+        resultChars.innerHTML = `<strong>${combined.length.toLocaleString()}</strong>자`;
+        charCount.textContent = '';
+        resultSection.classList.add('visible');
+        setTimeout(() => resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+        if (navigator.share) shareBtn.style.display = 'flex';
+      }
+
+      setLoading(false);
+    }
+
+    extractBtn.addEventListener('click', doExtract);
+
+    // ── Copy ────
+    copyBtn.addEventListener('click', async () => {
+      const text = resultTA.value; if (!text) return;
+      try { await navigator.clipboard.writeText(text); }
+      catch { resultTA.select(); document.execCommand('copy'); }
+      const orig = copyBtn.innerHTML;
+      copyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> 복사 완료!';
+      copyBtn.classList.add('copied');
+      setTimeout(() => { copyBtn.innerHTML = orig; copyBtn.classList.remove('copied'); }, 2000);
+    });
+
+    // ── Share ────
+    shareBtn.addEventListener('click', async () => {
+      try { await navigator.share({ title: 'Naver Blog Export', text: resultTA.value }); }
+      catch (e) { if (e.name !== 'AbortError') console.error(e); }
+    });
+
+    // ── Download ─
+    downloadBtn.addEventListener('click', () => {
+      const text = resultTA.value; if (!text) return;
+      const d = new Date();
+      const dt = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+      const urls = getUrls();
+      const name = `naver-blog-export-${urls.length}건-${dt}`;
+      const a = Object.assign(document.createElement('a'), {
+        href: URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' })),
+        download: `${name}.txt`
+      });
+      a.click(); URL.revokeObjectURL(a.href);
+    });
+  </script>
+</body>
+</html>
