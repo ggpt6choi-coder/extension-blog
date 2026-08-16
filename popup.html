@@ -600,6 +600,10 @@
     <div class="card" id="cafe-card">
       <div class="card-title">
         <span>네이버 카페 글 추출 (Cafe Mode)</span>
+        <label class="setting-item" style="cursor: pointer; user-select: none;">
+          <input type="checkbox" id="cafe-include-prompt" class="checkbox-custom" checked>
+          <span>프롬프트 포함</span>
+        </label>
       </div>
       <div class="detail-info">
         <div class="detail-row">
@@ -657,6 +661,23 @@
       </button>
       
       <div class="progress-status" id="comment-progress-status" style="display: none;">대기 중...</div>
+    </div>
+
+    <!-- GEMS Prompt Guide Card -->
+    <div class="card" id="gems-guide-card" style="padding: 12px 14px; background: rgba(255, 255, 255, 0.02); margin-top: 4px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 12px; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-naver)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l4 6-10 12L2 9z"/></svg>
+            GEMS 지침서 복사
+          </span>
+          <span style="font-size: 11px; color: var(--text-sub);">Gemini Gems 맞춤 지침서 내용 복사</span>
+        </div>
+        <button class="btn btn-secondary" id="gems-guide-copy-btn" style="padding: 6px 12px; font-size: 12px; height: 32px; width: auto; flex-shrink: 0;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          <span>지침서 복사</span>
+        </button>
+      </div>
     </div>
   </div>
 

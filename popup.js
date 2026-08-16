@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const imageDownloadSpinner = document.getElementById('image-download-spinner');
 
   const cafeCount = document.getElementById('cafe-count');
+  const cafeIncludePrompt = document.getElementById('cafe-include-prompt');
   const cafeCopyBtn = document.getElementById('cafe-copy-btn');
   const cafeCopySpinner = document.getElementById('cafe-copy-spinner');
   const cafeSaveBtn = document.getElementById('cafe-save-btn');
@@ -123,18 +124,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     tabBtnCafe.addEventListener('click', () => switchTab('cafe'));
   }
 
-  // Load last active tab from storage on startup
+  // Load last active tab & prompt checkbox from storage on startup
   try {
-    chrome.storage.local.get('activeTab', (result) => {
+    chrome.storage.local.get(['activeTab', 'cafeIncludePrompt'], (result) => {
       if (result && result.activeTab === 'cafe') {
         switchTab('cafe');
       } else {
         switchTab('blog');
       }
+      if (cafeIncludePrompt && result && typeof result.cafeIncludePrompt === 'boolean') {
+        cafeIncludePrompt.checked = result.cafeIncludePrompt;
+      }
     });
   } catch (e) {
     console.error('Failed to load active tab from storage:', e);
     switchTab('blog');
+  }
+
+  if (cafeIncludePrompt) {
+    cafeIncludePrompt.addEventListener('change', () => {
+      try {
+        chrome.storage.local.set({ cafeIncludePrompt: cafeIncludePrompt.checked });
+      } catch (e) {
+        console.error(e);
+      }
+    });
   }
 
   // Initialize
@@ -1071,7 +1085,14 @@ ${res.content}`;
 
       try {
         const { text, count } = await fetchAndExtractCafePosts();
-        const copied = await copyToClipboard(text);
+
+        let finalText = text;
+        if (cafeIncludePrompt && cafeIncludePrompt.checked) {
+          const promptHeader = `내가 준 ${count}개의 글에 대해 댓글 작성해줘.\n\n`;
+          finalText = promptHeader + text;
+        }
+
+        const copied = await copyToClipboard(finalText);
         if (copied) {
           showToast(`📋 ${count}개 카페글 복사 완료!`);
         } else {
@@ -1384,8 +1405,9 @@ ${res.content}`;
       }
       
       const count = end - start + 1;
-      if (count > 50) {
-        showToast('한 번에 최대 50개까지만 열 수 있습니다.', true);
+      if (count > 80) {
+        alert(`한 번에 최대 80개까지만 열 수 있습니다. (현재 요청: ${count}개)\n브라우저 멈춤 및 네이버 차단 방지를 위해 80개 이하로 범위를 지정해주세요.`);
+        showToast('⚠️ 한 번에 최대 80개까지만 열 수 있습니다.', true);
         return;
       }
       
@@ -1393,7 +1415,8 @@ ${res.content}`;
       if (tabOpenerSpinner) tabOpenerSpinner.style.display = 'inline-block';
       
       try {
-        showToast(`📂 ${count}개 탭 여는 중...`);
+        let openedCount = 0;
+        showToast(`📂 ${count}개 탭 여는 중... (0/${count})`);
         
         for (let i = start; i <= end; i++) {
           const url = template.replace('[NUM]', i);
@@ -1401,8 +1424,18 @@ ${res.content}`;
             url: url,
             active: false // Open in background to prevent flashing/focus loss
           });
-          // Wait 80ms to avoid freezing browser tab creation queue
-          await sleep(80);
+          openedCount++;
+          
+          showToast(`📂 탭 여는 중... (${openedCount}/${count})`);
+
+          // 10개 열릴 때마다 3초 대기하여 브라우저/네이버 과부하 방지 (마지막 탭 제외)
+          if (openedCount % 10 === 0 && i < end) {
+            showToast(`⏳ 10개 오픈 완료. 안정성을 위해 3초 대기 중... (${openedCount}/${count})`);
+            await sleep(3000);
+          } else {
+            // 기본 탭 생성 간격 300ms
+            await sleep(300);
+          }
         }
         
         showToast(`🎉 ${count}개 탭이 성공적으로 열렸습니다!`);
@@ -1438,6 +1471,86 @@ ${res.content}`;
       } finally {
         tabOpenerBtn.disabled = false;
         if (tabOpenerSpinner) tabOpenerSpinner.style.display = 'none';
+      }
+    });
+  }
+
+  // ── GEMS Guide Copy ──
+  const gemsGuideCopyBtn = document.getElementById('gems-guide-copy-btn');
+  const GEMS_GUIDE_TEXT = `# [GEMS 지침서] 다이렉트결혼준비 댓글교류 어시스턴트
+
+당신은 다이렉트결혼준비 카페의 회원간 댓글교류 포인트 활동을 도와주는 어시스턴트입니다.
+매일 댓글 10개 이상(각 10자 이상)을 달면 1,000점을 적립할 수 있으며, 월 최대 10일, 10,000점까지 적립 가능합니다.
+
+---
+
+## 1. 댓글교류 규정 (반드시 준수)
+- 수량 및 글자수: 하루에 댓글 10개 이상 필요, 댓글 1개당 10자 이상 (이모티콘, 특수문자는 글자수 불인정)
+- 포함 제외: 대댓글, 본인 글에 단 댓글은 개수에서 제외
+- 다양성: 여러 게시판에서 다양하게 작성해야 함
+- 신청 및 적립 기간: 다음 달 1일 이후에 전월 활동분 신청 가능, 예식 완료 후 최대 2년까지 적립 가능
+
+---
+
+## 2. 절대 금지 댓글 유형 (미준수 시 포인트 거절)
+- "축하드려요", "축하드립니다", "예쁘네요", "예쁘시네요", "맛있어보여요", "큰산 넘으셨네요"
+- 위와 비슷한 짧고 반복적인 댓글
+- 타인의 댓글을 복사하거나 약간만 수정한 댓글
+- 내용을 읽지 않고 쓸 수 있는 성의 없는 댓글
+- "답방 가요", "댓글 약속" 등의 품앗이 유도 문구
+
+---
+
+## 3. 핵심 작성 원칙 (AI 티 안 내기 & 사람처럼 쓰기)
+- **구체적인 키워드 매칭:** 글쓴이가 언급한 구체적인 지명, 브랜드명, 감정 표현, 에피소드 단어를 댓글에 반드시 녹여내어 '진짜 읽고 쓴 느낌'을 줍니다.
+- **자연스러운 구어체와 신조어/자음 활용:** "~인 것 같아요 ㅎㅎ", "ㅠㅠ", 완전 공감해요", "꿀팁이네요!" 등 실제 카페 회원들이 자주 쓰는 부드럽고 친근한 모바일 말투를 구사합니다. (단, 기계적인 반복 금지)
+- **문장 내 줄바꿈 반영:** 가독성을 위해 문장 중간 자연스러운 위치에 줄바꿈을 적용하되, JSON 포맷 깨짐 방지를 위해 반드시 \\n 문자로 표시합니다.
+
+---
+
+## 4. 사용자 대화 모드 및 출력 양식
+
+### 모드 1: 카페 글 내용 공유 ➔ 댓글 초안 제공
+사용자가 카페 글 내용을 붙여넣으면 글 내용을 파악하여 진짜로 반응하는 맞춤형 댓글 초안 3가지를 작성합니다.
+- 초안A (공감형): 글쓴이 상황과 감정에 격하게 공감하는 내용 (줄바꿈 \\n 포함, 20자 이상)
+- 초안B (정보공유형): 관련 경험, 팁을 나누거나 조언하는 내용 (줄바꿈 \\n 포함, 20자 이상)
+- 초안C (질문형): 글 내용과 관련된 디테일을 자연스럽게 묻는 내용 (줄바꿈 \\n 포함, 20자 이상)
+
+※ 출력 시 하단에 다음 주의 문구를 필수로 포함합니다:
+"⚠️ 그대로 복붙 금지! 본인 말투로 조금 바꿔서 사용하세요. 같은 표현을 여러 게시글에 반복하면 거절될 수 있어요."
+
+---
+
+### ⭐ 모드 2: 오늘 댓글 빠르게 완성 (JSON 출력형 - 핵심 기능)
+사용자가 "오늘 댓글 N개 채워줘"라고 하거나, 여러 개의 카페 게시글 제목/본문을 한꺼번에 제공할 경우, 사용자가 원클릭으로 바로 복사해서 쓸 수 있도록 마크다운 코드 블록 안에 깔끔한 JSON 형식으로 최종 답변을 출력합니다.
+
+[출력 및 작성 규칙]
+1. 사용자가 제공한 글의 개수나 요청한 수량(N개)에 맞춰 \`txt1\`부터 \`txtN\`까지 동적으로 JSON을 구성합니다. (개수 제한 없음)
+2. 각 댓글은 반드시 공백 제외 10자 이상(안전하게 20~50자 사이 권장)으로 작성합니다.
+3. 문장 중간에 가독성을 위한 줄바꿈을 넣고, 반드시 \\n으로 표기합니다.
+4. AI 특유의 정형화된 어조("~해보시는 것을 추천합니다", "~라는 생각이 듭니다")를 절대 금지하고, 실제 예신/예랑이가 쓰는 말투로 작성합니다.
+
+[JSON 출력 양식 예시]
+\`\`\`json
+{
+  "txt1": "결혼 준비하다 보면 진짜 숨만 쉬어도 돈 나가는 기분이죠 ㅠㅠ\\n주식까지 속상하게 하면 더 힘 빠지실 텐데 우리 같이 힘내서 예산 아껴봐요 화이팅!",
+  "txt2": "엘블레스가 베뉴시라면 홀 분위기 잘 아는 작가님이 진짜 최고예요!\\n인스타 피드 톤이 마음에 쏙 드셨다니 당일에 인생 사진 가득 건지실 것 같아요 ㅎㅎ",
+  "txt3": "세 시간이나 묵묵히 기다려준 남편분 진짜 다정하고 스윗하시네요..\\n회사 때문에 속상했던 마음 남편분 얼굴 보면서 따뜻하게 녹이셨으면 좋겠어요!",
+  "txtN": "사용자가 요청한 개수 혹은 제공한 글의 개수만큼 줄바꿈(\\\\n)을 포함하여 순차적으로 생성..."
+}
+\`\`\``;
+
+  if (gemsGuideCopyBtn) {
+    gemsGuideCopyBtn.addEventListener('click', async () => {
+      try {
+        const copied = await copyToClipboard(GEMS_GUIDE_TEXT);
+        if (copied) {
+          showToast('💎 GEMS 지침서가 복사되었습니다!');
+        } else {
+          showToast('지침서 복사에 실패했습니다.', true);
+        }
+      } catch (e) {
+        showToast('지침서 복사 중 오류가 발생했습니다.', true);
       }
     });
   }
