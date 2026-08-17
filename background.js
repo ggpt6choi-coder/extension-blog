@@ -476,3 +476,246 @@ ${cleanedText}
     console.error('Background command error:', err);
   }
 });
+
+// =========================================================================
+// Background Auto Comment Execution & State Management
+// =========================================================================
+let autoCommentState = {
+  isRunning: false,
+  currentStep: 0,
+  totalSteps: 0,
+  successCount: 0,
+  statusText: '',
+  statusColor: '',
+  finished: false,
+  error: null
+};
+
+async function broadcastAutoCommentState(stateUpdate) {
+  autoCommentState = { ...autoCommentState, ...stateUpdate };
+  await chrome.storage.local.set({ autoCommentState });
+  try {
+    chrome.runtime.sendMessage({
+      type: 'AUTO_COMMENT_STATE_UPDATE',
+      state: autoCommentState
+    }).catch(() => {});
+  } catch (e) {}
+}
+
+async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
+  if (autoCommentState.isRunning) return;
+
+  await broadcastAutoCommentState({
+    isRunning: true,
+    currentStep: 0,
+    totalSteps: 0,
+    successCount: 0,
+    statusText: '카페 탭 조회 중...',
+    statusColor: 'var(--text-sub)',
+    finished: false,
+    error: null
+  });
+
+  try {
+    const cafeTabs = await chrome.tabs.query({
+      url: ["*://cafe.naver.com/*"],
+      currentWindow: true
+    });
+
+    const validCafeTabs = cafeTabs.filter(tab => {
+      if (!tab.url) return false;
+      return /\/cafes\/\d+\/articles\/\d+/.test(tab.url);
+    }).sort((a, b) => a.index - b.index);
+
+    if (validCafeTabs.length === 0) {
+      throw new Error('댓글을 입력할 네이버 카페 탭이 없습니다.');
+    }
+
+    const totalToProcess = Math.min(validCafeTabs.length, commentsList.length);
+    let successCount = 0;
+
+    await broadcastAutoCommentState({
+      totalSteps: totalToProcess,
+      statusText: `댓글 자동 입력 시작 (대상 탭: ${totalToProcess}개)...`
+    });
+
+    for (let i = 0; i < totalToProcess; i++) {
+      const tab = validCafeTabs[i];
+      const commentText = commentsList[i];
+
+      await broadcastAutoCommentState({
+        currentStep: i + 1,
+        statusText: `${i + 1}/${totalToProcess}번째 탭 댓글 입력 중...`
+      });
+
+      try {
+        const injectionResults = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          func: async (text, shouldAutoSubmit) => {
+            const waitForElement = async (selectorFn, maxWaitMs = 3000) => {
+              const startTime = Date.now();
+              while (Date.now() - startTime < maxWaitMs) {
+                const el = selectorFn();
+                if (el) return el;
+                await new Promise(r => setTimeout(r, 200));
+              }
+              return null;
+            };
+
+            const findTextarea = () => {
+              return document.querySelector('.comment_inbox_text') || 
+                     document.querySelector('textarea.comment_inbox_text') ||
+                     document.getElementById('comment_text') ||
+                     document.querySelector('.CommentWriter textarea');
+            };
+
+            const textarea = await waitForElement(findTextarea, 3000);
+            if (!textarea) return null;
+
+            // 중복 실행 방지 가드
+            const now = Date.now();
+            if (window.__nblm_last_comment_time && (now - window.__nblm_last_comment_time < 5000)) {
+              return { success: true, submitted: true, skipped: true };
+            }
+            window.__nblm_last_comment_time = now;
+
+            textarea.focus();
+            const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            if (nativeTextAreaValueSetter) {
+              nativeTextAreaValueSetter.call(textarea, text);
+            } else {
+              textarea.value = text;
+            }
+
+            textarea.dispatchEvent(new Event('focus', { bubbles: true }));
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+            textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+
+            if (shouldAutoSubmit) {
+              await new Promise(r => setTimeout(r, 400));
+
+              const findRegisterBtn = () => {
+                const writer = textarea.closest('.CommentWriter') || textarea.closest('.comment_inbox') || document;
+                let btn = writer.querySelector('.btn_register') ||
+                          writer.querySelector('.register_box .btn_register') ||
+                          writer.querySelector('a.btn_register') ||
+                          writer.querySelector('button.btn_register') ||
+                          document.querySelector('.CommentWriter .btn_register') ||
+                          document.querySelector('.btn_register') ||
+                          document.getElementById('comment_register_button');
+                if (btn) return btn;
+
+                const allClickables = Array.from(writer.querySelectorAll('button, a, div[role="button"]'));
+                return allClickables.find(el => el.textContent && el.textContent.trim() === '등록');
+              };
+
+              const registerBtn = await waitForElement(findRegisterBtn, 2000);
+              if (registerBtn) {
+                registerBtn.focus();
+                if (typeof registerBtn.click === 'function') {
+                  registerBtn.click();
+                } else {
+                  registerBtn.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window
+                  }));
+                }
+                return { success: true, submitted: true };
+              }
+              return { success: true, submitted: false, error: '등록 버튼을 찾을 수 없습니다.' };
+            }
+            return { success: true, submitted: false };
+          },
+          args: [commentText, autoSubmit]
+        });
+
+        let injected = false;
+        if (injectionResults && injectionResults.length > 0) {
+          for (const res of injectionResults) {
+            if (res.result && res.result.success) {
+              injected = true;
+              break;
+            }
+          }
+        }
+
+        if (injected) {
+          successCount++;
+        }
+      } catch (injectErr) {
+        console.error(`Background auto-comment error for tab ${tab.id}:`, injectErr);
+      }
+
+      // Keep-Alive chunked sleep with live countdown (supports 50s, 60s, or any long delays)
+      if (i < totalToProcess - 1) {
+        const totalDelaySec = Math.max(1, Math.round(delaySec || 5));
+        
+        for (let s = totalDelaySec; s > 0; s--) {
+          await broadcastAutoCommentState({
+            currentStep: i + 1,
+            statusText: `${i + 1}/${totalToProcess}번째 완료 (다음 탭까지 ${s}초 대기 중...)`,
+            statusColor: 'var(--text-sub)'
+          });
+          
+          await new Promise(r => setTimeout(r, 1000));
+          
+          // Chrome Service Worker Keep-Alive heartbeat ping every 5 seconds
+          if (s % 5 === 0) {
+            try { 
+              await chrome.runtime.getPlatformInfo(); 
+            } catch (e) {}
+          }
+        }
+      }
+    }
+
+    await broadcastAutoCommentState({
+      isRunning: false,
+      successCount: successCount,
+      statusText: `입력 완료! (성공: ${successCount}/${totalToProcess}개)`,
+      statusColor: 'var(--accent-naver)',
+      finished: true
+    });
+
+    // Notify active tab with toast
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab && activeTab.id) {
+        showWebToast(activeTab.id, `🎉 댓글 일괄 입력 완료! (${successCount}/${totalToProcess}개 성공)`);
+      }
+    } catch (e) {}
+
+  } catch (err) {
+    console.error('Auto comment background task failed:', err);
+    await broadcastAutoCommentState({
+      isRunning: false,
+      statusText: `실패: ${err.message || err}`,
+      statusColor: 'var(--danger)',
+      finished: true,
+      error: err.message
+    });
+
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab && activeTab.id) {
+        showWebToast(activeTab.id, `❌ 댓글 입력 실패: ${err.message || err}`, true);
+      }
+    } catch (e) {}
+  }
+}
+
+// Runtime message listener
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'START_AUTO_COMMENT') {
+    runAutoCommentTask(message.payload);
+    sendResponse({ started: true });
+    return true;
+  }
+  if (message.type === 'GET_AUTO_COMMENT_STATE') {
+    sendResponse({ state: autoCommentState });
+    return true;
+  }
+});
+

@@ -1164,9 +1164,8 @@ ${res.content}`;
     }
   }
 
-  // Parse and validate JSON comment input in real-time
-  commentJsonInput.addEventListener('input', () => {
-    const val = commentJsonInput.value.trim();
+  // Helper to parse and update comment JSON state
+  function processCommentJson(val) {
     if (!val) {
       parsedComments = {};
       commentJsonInput.style.borderColor = '';
@@ -1176,22 +1175,13 @@ ${res.content}`;
     
     let obj;
     try {
-      // 1. Try parsing as strict JSON
       obj = JSON.parse(val);
     } catch (strictErr) {
       try {
-        // 2. Try parsing as relaxed JSON (auto-quote keys and strip trailing commas)
         let relaxed = val;
-        
-        // Quote unquoted keys (e.g. key : "value")
         relaxed = relaxed.replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":');
-        
-        // Quote single-quoted keys (e.g. 'key' : "value")
         relaxed = relaxed.replace(/([{,]\s*)'([^']+)'\s*:/g, '$1"$2":');
-        
-        // Strip trailing commas before closing braces/brackets
         relaxed = relaxed.replace(/,\s*([}\]])/g, '$1');
-        
         obj = JSON.parse(relaxed);
       } catch (relaxedErr) {
         parsedComments = {};
@@ -1206,8 +1196,6 @@ ${res.content}`;
     try {
       const cleaned = {};
       let index = 1;
-      
-      // Sort keys to maintain order txt1, txt2, etc., or standard object keys
       const keys = Object.keys(obj).sort((a, b) => {
         const numA = parseInt(a.replace(/\D/g, '')) || 0;
         const numB = parseInt(b.replace(/\D/g, '')) || 0;
@@ -1232,9 +1220,118 @@ ${res.content}`;
       commentAutoBtn.disabled = true;
       commentMatchStatus.textContent = '데이터 처리 중 오류가 발생했습니다.';
     }
+  }
+
+  // Apply UI state from background auto-comment worker
+  function applyAutoCommentUIState(state) {
+    if (!state) return;
+
+    if (state.isRunning) {
+      commentAutoBtn.disabled = true;
+      commentAutoSpinner.style.display = 'inline-block';
+      commentProgressStatus.style.display = 'block';
+      commentProgressStatus.style.color = state.statusColor || 'var(--text-sub)';
+      commentProgressStatus.textContent = state.statusText || '댓글 자동 입력 진행 중...';
+      
+      commentJsonInput.disabled = true;
+      commentAutoSubmit.disabled = true;
+      commentDelay.disabled = true;
+      if (cafeCopyBtn) cafeCopyBtn.disabled = true;
+      if (cafeSaveBtn) cafeSaveBtn.disabled = true;
+    } else {
+      commentAutoSpinner.style.display = 'none';
+      commentJsonInput.disabled = false;
+      commentAutoSubmit.disabled = false;
+      commentDelay.disabled = false;
+      
+      if (cafeCopyBtn) cafeCopyBtn.disabled = (detectedCafeTabsCount === 0);
+      if (cafeSaveBtn) cafeSaveBtn.disabled = (detectedCafeTabsCount === 0);
+      
+      updateCommentMatchStatus();
+      
+      if (state.finished && state.statusText) {
+        commentProgressStatus.style.display = 'block';
+        commentProgressStatus.style.color = state.statusColor || 'var(--accent-naver)';
+        commentProgressStatus.textContent = state.statusText;
+      }
+    }
+  }
+
+  // Restore saved input values & background state on load
+  chrome.storage.local.get([
+    'savedCommentJson', 
+    'savedCommentAutoSubmit', 
+    'savedCommentDelay',
+    'savedTabOpenerTemplate',
+    'savedTabOpenerStart',
+    'savedTabOpenerEnd',
+    'autoCommentState'
+  ], (res) => {
+    if (res.savedCommentJson !== undefined) {
+      commentJsonInput.value = res.savedCommentJson;
+      processCommentJson(res.savedCommentJson.trim());
+    }
+    if (res.savedCommentAutoSubmit !== undefined) {
+      commentAutoSubmit.checked = res.savedCommentAutoSubmit;
+    }
+    if (res.savedCommentDelay !== undefined) {
+      commentDelay.value = res.savedCommentDelay;
+    }
+    if (tabOpenerTemplate && res.savedTabOpenerTemplate !== undefined) {
+      tabOpenerTemplate.value = res.savedTabOpenerTemplate;
+    }
+    if (tabOpenerStart && res.savedTabOpenerStart !== undefined) {
+      tabOpenerStart.value = res.savedTabOpenerStart;
+    }
+    if (tabOpenerEnd && res.savedTabOpenerEnd !== undefined) {
+      tabOpenerEnd.value = res.savedTabOpenerEnd;
+    }
+    
+    // Restore running status if background task is active
+    if (res.autoCommentState) {
+      applyAutoCommentUIState(res.autoCommentState);
+    }
   });
 
-  // Execute Batch Auto Comment
+  // Listen to background progress updates in real-time
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === 'AUTO_COMMENT_STATE_UPDATE') {
+      applyAutoCommentUIState(message.state);
+    }
+  });
+
+  // Save comment inputs on user change
+  commentJsonInput.addEventListener('input', () => {
+    const val = commentJsonInput.value;
+    chrome.storage.local.set({ savedCommentJson: val });
+    processCommentJson(val.trim());
+  });
+
+  commentAutoSubmit.addEventListener('change', () => {
+    chrome.storage.local.set({ savedCommentAutoSubmit: commentAutoSubmit.checked });
+  });
+
+  commentDelay.addEventListener('input', () => {
+    chrome.storage.local.set({ savedCommentDelay: commentDelay.value });
+  });
+
+  if (tabOpenerTemplate) {
+    tabOpenerTemplate.addEventListener('input', () => {
+      chrome.storage.local.set({ savedTabOpenerTemplate: tabOpenerTemplate.value });
+    });
+  }
+  if (tabOpenerStart) {
+    tabOpenerStart.addEventListener('input', () => {
+      chrome.storage.local.set({ savedTabOpenerStart: tabOpenerStart.value });
+    });
+  }
+  if (tabOpenerEnd) {
+    tabOpenerEnd.addEventListener('input', () => {
+      chrome.storage.local.set({ savedTabOpenerEnd: tabOpenerEnd.value });
+    });
+  }
+
+  // Execute Batch Auto Comment (Delegated to Background Service Worker)
   commentAutoBtn.addEventListener('click', async () => {
     const commentKeys = Object.keys(parsedComments);
     const commentsList = commentKeys.map(k => parsedComments[k]);
@@ -1244,204 +1341,38 @@ ${res.content}`;
       return;
     }
 
-    commentAutoBtn.disabled = true;
-    commentAutoSpinner.style.display = 'inline-block';
-    commentProgressStatus.style.display = 'block';
-    commentProgressStatus.style.color = 'var(--text-sub)';
-    commentProgressStatus.textContent = '카페 탭 조회 중...';
-    
-    // Disable inputs during processing
-    commentJsonInput.disabled = true;
-    commentAutoSubmit.disabled = true;
-    commentDelay.disabled = true;
-    if (cafeCopyBtn) cafeCopyBtn.disabled = true;
-    if (cafeSaveBtn) cafeSaveBtn.disabled = true;
-    
-    try {
-      const cafeTabs = await chrome.tabs.query({
-        url: ["*://cafe.naver.com/*"],
-        currentWindow: true
-      });
-      
-      const validCafeTabs = cafeTabs.filter(tab => {
-        if (!tab.url) return false;
-        return /\/cafes\/\d+\/articles\/\d+/.test(tab.url);
-      }).sort((a, b) => a.index - b.index);
+    const autoSubmit = commentAutoSubmit.checked;
+    const delaySec = parseFloat(commentDelay.value) || 5;
 
-      detectedCafeTabsCount = validCafeTabs.length;
-      updateCommentMatchStatus();
+    // Immediate UI feedback
+    applyAutoCommentUIState({
+      isRunning: true,
+      statusText: '백그라운드 작업 시작 중...',
+      statusColor: 'var(--text-sub)'
+    });
 
-      if (validCafeTabs.length === 0) {
-        throw new Error('댓글을 입력할 네이버 카페 탭이 없습니다.');
+    // Send task to Background Service Worker
+    chrome.runtime.sendMessage({
+      type: 'START_AUTO_COMMENT',
+      payload: {
+        commentsList,
+        autoSubmit,
+        delaySec
       }
-
-      const totalToProcess = Math.min(validCafeTabs.length, commentsList.length);
-      commentProgressStatus.textContent = `댓글 자동 입력 시작 (대상 탭: ${totalToProcess}개)...`;
-      
-      let successCount = 0;
-      
-      for (let i = 0; i < totalToProcess; i++) {
-        const tab = validCafeTabs[i];
-        const commentText = commentsList[i];
-        
-        commentProgressStatus.textContent = `${i + 1}/${totalToProcess}번째 탭 댓글 입력 중...`;
-        
-        try {
-          const injectionResults = await chrome.scripting.executeScript({
-            target: { tabId: tab.id, allFrames: true },
-            func: async (text, autoRegister) => {
-              // 요소가 렌더링될 때까지 최대 maxWaitMs 대기하는 헬퍼 함수
-              const waitForElement = async (selectorFn, maxWaitMs = 3000) => {
-                const startTime = Date.now();
-                while (Date.now() - startTime < maxWaitMs) {
-                  const el = selectorFn();
-                  if (el) return el;
-                  await new Promise(r => setTimeout(r, 200));
-                }
-                return null;
-              };
-
-              // 1. 네이버 카페 댓글 입력창 탐색 (최대 3초 대기)
-              const findTextarea = () => {
-                return document.querySelector('.comment_inbox_text') || 
-                       document.querySelector('textarea.comment_inbox_text') ||
-                       document.getElementById('comment_text') ||
-                       document.querySelector('.CommentWriter textarea');
-              };
-
-              const textarea = await waitForElement(findTextarea, 3000);
-              if (!textarea) return null;
-
-              // 중복 실행 방지 가드 (단일 탭 내 다중 프레임 또는 더블 실행 차단)
-              const now = Date.now();
-              if (window.__nblm_last_comment_time && (now - window.__nblm_last_comment_time < 5000)) {
-                return { success: true, submitted: true, skipped: true };
-              }
-              window.__nblm_last_comment_time = now;
-
-              // 2. 포커스 및 텍스트 주입
-              textarea.focus();
-              
-              // React 16+ 제어 컴포넌트(Controlled Component) State 강제 동기화
-              const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-              if (nativeTextAreaValueSetter) {
-                nativeTextAreaValueSetter.call(textarea, text);
-              } else {
-                textarea.value = text;
-              }
-
-              // 3. 브라우저 이벤트 발송
-              textarea.dispatchEvent(new Event('focus', { bubbles: true }));
-              textarea.dispatchEvent(new Event('input', { bubbles: true }));
-              textarea.dispatchEvent(new Event('change', { bubbles: true }));
-              textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-
-              // 4. 자동 등록 옵션이 켜져 있는 경우
-              if (autoRegister) {
-                // 네이버 카페 React 컴포넌트가 글자수를 인지하고 등록 버튼을 활성화할 때까지 대기
-                await new Promise(r => setTimeout(r, 400));
-
-                // 등록 버튼 탐색 (다양한 UI 구조 호환)
-                const findRegisterBtn = () => {
-                  const writer = textarea.closest('.CommentWriter') || textarea.closest('.comment_inbox') || document;
-                  
-                  // 1순위: 직관적인 클래스명
-                  let btn = writer.querySelector('.btn_register') ||
-                            writer.querySelector('.register_box .btn_register') ||
-                            writer.querySelector('a.btn_register') ||
-                            writer.querySelector('button.btn_register') ||
-                            document.querySelector('.CommentWriter .btn_register') ||
-                            document.querySelector('.btn_register') ||
-                            document.getElementById('comment_register_button');
-
-                  if (btn) return btn;
-
-                  // 2순위: 텍스트가 '등록'인 버튼 또는 링크 탐색
-                  const allClickables = Array.from(writer.querySelectorAll('button, a, div[role="button"]'));
-                  btn = allClickables.find(el => el.textContent && el.textContent.trim() === '등록');
-                  return btn;
-                };
-
-                const registerBtn = await waitForElement(findRegisterBtn, 2000);
-                if (registerBtn) {
-                  registerBtn.focus();
-                  
-                  // 단 1회만 안전하게 클릭 실행 (더블 클릭 방지)
-                  if (typeof registerBtn.click === 'function') {
-                    registerBtn.click();
-                  } else {
-                    registerBtn.dispatchEvent(new MouseEvent('click', {
-                      bubbles: true,
-                      cancelable: true,
-                      view: window
-                    }));
-                  }
-
-                  return { success: true, submitted: true };
-                }
-                return { success: true, submitted: false, error: '등록 버튼을 찾을 수 없습니다.' };
-              }
-              return { success: true, submitted: false };
-            },
-            args: [commentText, commentAutoSubmit.checked]
-          });
-          
-          let injected = false;
-          if (injectionResults && injectionResults.length > 0) {
-            for (const res of injectionResults) {
-              if (res.result && res.result.success) {
-                injected = true;
-                break;
-              }
-            }
-          }
-          
-          if (injected) {
-            successCount++;
-          }
-        } catch (injectErr) {
-          console.error(`Failed to inject comment into tab ${tab.id}:`, injectErr);
-        }
-        
-        // Configurable delay between entries
-        const delaySec = parseFloat(commentDelay.value) || 5;
-        if (i < totalToProcess - 1) {
-          await sleep(delaySec * 1000);
-        }
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Failed to send auto comment task to background:', chrome.runtime.lastError);
+        showToast('작업 시작 실패: ' + chrome.runtime.lastError.message, true);
+        applyAutoCommentUIState({
+          isRunning: false,
+          statusText: '작업 시작 실패',
+          statusColor: 'var(--danger)',
+          finished: true
+        });
+      } else {
+        showToast('🚀 백그라운드에서 댓글 입력이 시작되었습니다.');
       }
-      
-      showToast(`💾 ${successCount}개 탭에 댓글 입력 완료!`);
-      commentProgressStatus.style.color = 'var(--accent-naver)';
-      commentProgressStatus.textContent = `입력 완료! (성공: ${successCount}/${totalToProcess}개)`;
-      
-    } catch (err) {
-      console.error('Auto comment execution failed:', err);
-      showToast(err.message || '댓글 자동 입력 중 오류가 발생했습니다.', true);
-      commentProgressStatus.style.color = 'var(--danger)';
-      commentProgressStatus.textContent = `실패: ${err.message || err}`;
-    } finally {
-      // Re-enable inputs
-      commentAutoBtn.disabled = false;
-      commentAutoSpinner.style.display = 'none';
-      commentJsonInput.disabled = false;
-      commentAutoSubmit.disabled = false;
-      commentDelay.disabled = false;
-      
-      // Update UI counts
-      const cafeTabs = await chrome.tabs.query({
-        url: ["*://cafe.naver.com/*"],
-        currentWindow: true
-      });
-      const validCafeTabs = cafeTabs.filter(tab => {
-        if (!tab.url) return false;
-        return /\/cafes\/\d+\/articles\/\d+/.test(tab.url);
-      });
-      detectedCafeTabsCount = validCafeTabs.length;
-      if (cafeCopyBtn) cafeCopyBtn.disabled = (detectedCafeTabsCount === 0);
-      if (cafeSaveBtn) cafeSaveBtn.disabled = (detectedCafeTabsCount === 0);
-      
-      updateCommentMatchStatus();
-    }
+    });
   });
 
   // --- Tab Opener Feature Logic ---
