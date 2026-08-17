@@ -1289,30 +1289,99 @@ ${res.content}`;
         try {
           const injectionResults = await chrome.scripting.executeScript({
             target: { tabId: tab.id, allFrames: true },
-            func: (text, autoRegister) => {
-              const textarea = document.querySelector('.comment_inbox_text') || document.getElementById('comment_text');
-              if (textarea) {
-                textarea.value = text;
-                
-                // Dispatch input events
-                const inputEvent = new Event('input', { bubbles: true });
-                const changeEvent = new Event('change', { bubbles: true });
-                textarea.dispatchEvent(inputEvent);
-                textarea.dispatchEvent(changeEvent);
-                
-                if (autoRegister) {
-                  const registerBtn = document.querySelector('.comment_inbox .btn_register') || 
-                                      document.querySelector('.btn_register') ||
-                                      document.querySelector('#comment_register_button');
-                  if (registerBtn) {
-                    registerBtn.click();
-                    return { success: true, submitted: true };
-                  }
-                  return { success: true, submitted: false, error: '등록 버튼을 찾을 수 없습니다.' };
+            func: async (text, autoRegister) => {
+              // 요소가 렌더링될 때까지 최대 maxWaitMs 대기하는 헬퍼 함수
+              const waitForElement = async (selectorFn, maxWaitMs = 3000) => {
+                const startTime = Date.now();
+                while (Date.now() - startTime < maxWaitMs) {
+                  const el = selectorFn();
+                  if (el) return el;
+                  await new Promise(r => setTimeout(r, 200));
                 }
-                return { success: true, submitted: false };
+                return null;
+              };
+
+              // 1. 네이버 카페 댓글 입력창 탐색 (최대 3초 대기)
+              const findTextarea = () => {
+                return document.querySelector('.comment_inbox_text') || 
+                       document.querySelector('textarea.comment_inbox_text') ||
+                       document.getElementById('comment_text') ||
+                       document.querySelector('.CommentWriter textarea');
+              };
+
+              const textarea = await waitForElement(findTextarea, 3000);
+              if (!textarea) return null;
+
+              // 중복 실행 방지 가드 (단일 탭 내 다중 프레임 또는 더블 실행 차단)
+              const now = Date.now();
+              if (window.__nblm_last_comment_time && (now - window.__nblm_last_comment_time < 5000)) {
+                return { success: true, submitted: true, skipped: true };
               }
-              return null;
+              window.__nblm_last_comment_time = now;
+
+              // 2. 포커스 및 텍스트 주입
+              textarea.focus();
+              
+              // React 16+ 제어 컴포넌트(Controlled Component) State 강제 동기화
+              const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+              if (nativeTextAreaValueSetter) {
+                nativeTextAreaValueSetter.call(textarea, text);
+              } else {
+                textarea.value = text;
+              }
+
+              // 3. 브라우저 이벤트 발송
+              textarea.dispatchEvent(new Event('focus', { bubbles: true }));
+              textarea.dispatchEvent(new Event('input', { bubbles: true }));
+              textarea.dispatchEvent(new Event('change', { bubbles: true }));
+              textarea.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+
+              // 4. 자동 등록 옵션이 켜져 있는 경우
+              if (autoRegister) {
+                // 네이버 카페 React 컴포넌트가 글자수를 인지하고 등록 버튼을 활성화할 때까지 대기
+                await new Promise(r => setTimeout(r, 400));
+
+                // 등록 버튼 탐색 (다양한 UI 구조 호환)
+                const findRegisterBtn = () => {
+                  const writer = textarea.closest('.CommentWriter') || textarea.closest('.comment_inbox') || document;
+                  
+                  // 1순위: 직관적인 클래스명
+                  let btn = writer.querySelector('.btn_register') ||
+                            writer.querySelector('.register_box .btn_register') ||
+                            writer.querySelector('a.btn_register') ||
+                            writer.querySelector('button.btn_register') ||
+                            document.querySelector('.CommentWriter .btn_register') ||
+                            document.querySelector('.btn_register') ||
+                            document.getElementById('comment_register_button');
+
+                  if (btn) return btn;
+
+                  // 2순위: 텍스트가 '등록'인 버튼 또는 링크 탐색
+                  const allClickables = Array.from(writer.querySelectorAll('button, a, div[role="button"]'));
+                  btn = allClickables.find(el => el.textContent && el.textContent.trim() === '등록');
+                  return btn;
+                };
+
+                const registerBtn = await waitForElement(findRegisterBtn, 2000);
+                if (registerBtn) {
+                  registerBtn.focus();
+                  
+                  // 단 1회만 안전하게 클릭 실행 (더블 클릭 방지)
+                  if (typeof registerBtn.click === 'function') {
+                    registerBtn.click();
+                  } else {
+                    registerBtn.dispatchEvent(new MouseEvent('click', {
+                      bubbles: true,
+                      cancelable: true,
+                      view: window
+                    }));
+                  }
+
+                  return { success: true, submitted: true };
+                }
+                return { success: true, submitted: false, error: '등록 버튼을 찾을 수 없습니다.' };
+              }
+              return { success: true, submitted: false };
             },
             args: [commentText, commentAutoSubmit.checked]
           });
@@ -1329,8 +1398,6 @@ ${res.content}`;
           
           if (injected) {
             successCount++;
-          } else {
-            console.warn(`Tab ${tab.id} does not have a comment inbox`);
           }
         } catch (injectErr) {
           console.error(`Failed to inject comment into tab ${tab.id}:`, injectErr);
@@ -1430,11 +1497,11 @@ ${res.content}`;
 
           // 10개 열릴 때마다 3초 대기하여 브라우저/네이버 과부하 방지 (마지막 탭 제외)
           if (openedCount % 10 === 0 && i < end) {
-            showToast(`⏳ 10개 오픈 완료. 안정성을 위해 3초 대기 중... (${openedCount}/${count})`);
-            await sleep(3000);
+            showToast(`⏳ 10개 오픈 완료. 안정성을 위해 2초 대기 중... (${openedCount}/${count})`);
+            await sleep(2000);
           } else {
-            // 기본 탭 생성 간격 300ms
-            await sleep(300);
+            // 기본 탭 생성 간격 150ms
+            await sleep(150);
           }
         }
         
