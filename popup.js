@@ -48,6 +48,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const commentAutoSubmit = document.getElementById('comment-auto-submit');
   const commentDelay = document.getElementById('comment-delay');
   const commentAutoBtn = document.getElementById('comment-auto-btn');
+  const commentAutoIcon = document.getElementById('comment-auto-icon');
+  const commentAutoBtnText = document.getElementById('comment-auto-btn-text');
   const commentAutoSpinner = document.getElementById('comment-auto-spinner');
   const commentProgressStatus = document.getElementById('comment-progress-status');
 
@@ -1227,7 +1229,16 @@ ${res.content}`;
     if (!state) return;
 
     if (state.isRunning) {
-      commentAutoBtn.disabled = true;
+      // Toggle button to Stop mode
+      commentAutoBtn.disabled = false;
+      commentAutoBtn.className = 'btn btn-danger';
+      if (commentAutoIcon) {
+        commentAutoIcon.innerHTML = '<rect x="6" y="6" width="12" height="12" fill="currentColor"></rect>';
+      }
+      if (commentAutoBtnText) {
+        commentAutoBtnText.textContent = '일괄 입력 중지 (Stop)';
+      }
+      
       commentAutoSpinner.style.display = 'inline-block';
       commentProgressStatus.style.display = 'block';
       commentProgressStatus.style.color = state.statusColor || 'var(--text-sub)';
@@ -1239,6 +1250,15 @@ ${res.content}`;
       if (cafeCopyBtn) cafeCopyBtn.disabled = true;
       if (cafeSaveBtn) cafeSaveBtn.disabled = true;
     } else {
+      // Restore button to Start mode
+      commentAutoBtn.className = 'btn btn-primary';
+      if (commentAutoIcon) {
+        commentAutoIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
+      }
+      if (commentAutoBtnText) {
+        commentAutoBtnText.textContent = '댓글 일괄 자동 입력 실행';
+      }
+
       commentAutoSpinner.style.display = 'none';
       commentJsonInput.disabled = false;
       commentAutoSubmit.disabled = false;
@@ -1331,8 +1351,26 @@ ${res.content}`;
     });
   }
 
-  // Execute Batch Auto Comment (Delegated to Background Service Worker)
+  // Execute or Stop Batch Auto Comment
   commentAutoBtn.addEventListener('click', async () => {
+    // If currently running, send stop request
+    if (commentAutoBtn.classList.contains('btn-danger')) {
+      commentAutoBtn.disabled = true;
+      if (commentAutoBtnText) {
+        commentAutoBtnText.textContent = '중지 요청 중...';
+      }
+      commentProgressStatus.textContent = '작업 중지 요청 중...';
+      
+      chrome.runtime.sendMessage({ type: 'STOP_AUTO_COMMENT' }, (res) => {
+        if (chrome.runtime.lastError) {
+          console.error('Failed to send stop message:', chrome.runtime.lastError);
+        }
+        showToast('⏹️ 댓글 자동 입력 중지를 요청했습니다.');
+      });
+      return;
+    }
+
+    // Start auto comment
     const commentKeys = Object.keys(parsedComments);
     const commentsList = commentKeys.map(k => parsedComments[k]);
     

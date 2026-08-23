@@ -211,6 +211,22 @@
       cursor: not-allowed;
     }
     
+    .btn-danger {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: #ffffff;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+    }
+    
+    .btn-danger:hover {
+      background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(239, 68, 68, 0.35);
+    }
+    
+    .btn-danger:active {
+      transform: translateY(0);
+    }
+    
     /* Toast notifications */
     .toast-container {
       position: fixed;
@@ -656,8 +672,8 @@
 
       <button class="btn btn-primary" id="comment-auto-btn" disabled>
         <span class="spinner" id="comment-auto-spinner"></span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-        <span>댓글 일괄 자동 입력 실행</span>
+        <svg id="comment-auto-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <span id="comment-auto-btn-text">댓글 일괄 자동 입력 실행</span>
       </button>
       
       <div class="progress-status" id="comment-progress-status" style="display: none;">대기 중...</div>

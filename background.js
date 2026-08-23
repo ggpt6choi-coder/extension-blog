@@ -480,6 +480,7 @@ ${cleanedText}
 // =========================================================================
 // Background Auto Comment Execution & State Management
 // =========================================================================
+let autoCommentAbortRequested = false;
 let autoCommentState = {
   isRunning: false,
   currentStep: 0,
@@ -502,8 +503,16 @@ async function broadcastAutoCommentState(stateUpdate) {
   } catch (e) {}
 }
 
+function stopAutoCommentTask() {
+  if (autoCommentState.isRunning) {
+    autoCommentAbortRequested = true;
+  }
+}
+
 async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
   if (autoCommentState.isRunning) return;
+
+  autoCommentAbortRequested = false;
 
   await broadcastAutoCommentState({
     isRunning: true,
@@ -540,6 +549,23 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
     });
 
     for (let i = 0; i < totalToProcess; i++) {
+      if (autoCommentAbortRequested) {
+        await broadcastAutoCommentState({
+          isRunning: false,
+          successCount: successCount,
+          statusText: `중단됨 (성공: ${successCount}/${totalToProcess}개 완료)`,
+          statusColor: 'var(--danger)',
+          finished: true
+        });
+        try {
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (activeTab && activeTab.id) {
+            showWebToast(activeTab.id, `⏹️ 댓글 자동 입력이 중단되었습니다. (${successCount}/${totalToProcess}개 완료)`);
+          }
+        } catch (e) {}
+        return;
+      }
+
       const tab = validCafeTabs[i];
       const commentText = commentsList[i];
 
@@ -648,11 +674,30 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
         console.error(`Background auto-comment error for tab ${tab.id}:`, injectErr);
       }
 
+      if (autoCommentAbortRequested) {
+        await broadcastAutoCommentState({
+          isRunning: false,
+          successCount: successCount,
+          statusText: `중단됨 (성공: ${successCount}/${totalToProcess}개 완료)`,
+          statusColor: 'var(--danger)',
+          finished: true
+        });
+        try {
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (activeTab && activeTab.id) {
+            showWebToast(activeTab.id, `⏹️ 댓글 자동 입력이 중단되었습니다. (${successCount}/${totalToProcess}개 완료)`);
+          }
+        } catch (e) {}
+        return;
+      }
+
       // Keep-Alive chunked sleep with live countdown (supports 50s, 60s, or any long delays)
       if (i < totalToProcess - 1) {
         const totalDelaySec = Math.max(1, Math.round(delaySec || 5));
         
         for (let s = totalDelaySec; s > 0; s--) {
+          if (autoCommentAbortRequested) break;
+
           await broadcastAutoCommentState({
             currentStep: i + 1,
             statusText: `${i + 1}/${totalToProcess}번째 완료 (다음 탭까지 ${s}초 대기 중...)`,
@@ -667,6 +712,23 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
               await chrome.runtime.getPlatformInfo(); 
             } catch (e) {}
           }
+        }
+
+        if (autoCommentAbortRequested) {
+          await broadcastAutoCommentState({
+            isRunning: false,
+            successCount: successCount,
+            statusText: `중단됨 (성공: ${successCount}/${totalToProcess}개 완료)`,
+            statusColor: 'var(--danger)',
+            finished: true
+          });
+          try {
+            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (activeTab && activeTab.id) {
+              showWebToast(activeTab.id, `⏹️ 댓글 자동 입력이 중단되었습니다. (${successCount}/${totalToProcess}개 완료)`);
+            }
+          } catch (e) {}
+          return;
         }
       }
     }
@@ -711,6 +773,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'START_AUTO_COMMENT') {
     runAutoCommentTask(message.payload);
     sendResponse({ started: true });
+    return true;
+  }
+  if (message.type === 'STOP_AUTO_COMMENT') {
+    stopAutoCommentTask();
+    sendResponse({ stopped: true });
     return true;
   }
   if (message.type === 'GET_AUTO_COMMENT_STATE') {
