@@ -387,6 +387,22 @@ ${cleanedText}
       const scrollPositions = [];
       let currentY = 0;
       
+      // Safe capture helper with retry backoff to avoid MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota
+      const safeCaptureVisibleTab = async (windowId = null, options = { format: 'png' }, maxRetries = 4) => {
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          try {
+            return await chrome.tabs.captureVisibleTab(windowId, options);
+          } catch (err) {
+            const isQuotaErr = err?.message && err.message.includes('MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND');
+            if (isQuotaErr && attempt < maxRetries - 1) {
+              await new Promise(r => setTimeout(r, 600 + attempt * 300));
+              continue;
+            }
+            throw err;
+          }
+        }
+      };
+
       // 2. Loop scroll & capture
       while (currentY < totalHeight) {
         const scrollY = Math.min(currentY, totalHeight - viewportHeight);
@@ -399,11 +415,33 @@ ${cleanedText}
           func: (y) => { window.scrollTo(0, y); }
         });
         
-        // Render wait delay
-        await new Promise(resolve => setTimeout(resolve, 250));
+        // 초기 렌더 대기
+        await new Promise(resolve => setTimeout(resolve, 400));
+        
+        // 현재 뷰포트 내 lazy-load 이미지가 모두 로드될 때까지 대기 (최대 2.5초)
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => new Promise((resolve) => {
+            const maxWait = setTimeout(resolve, 2500);
+            const imgs = [...document.querySelectorAll('img')].filter(img => {
+              const r = img.getBoundingClientRect();
+              return r.top < window.innerHeight && r.bottom > 0 && r.width > 0;
+            });
+            if (!imgs.length) { clearTimeout(maxWait); resolve(); return; }
+            let count = 0;
+            const done = () => { if (++count >= imgs.length) { clearTimeout(maxWait); resolve(); } };
+            imgs.forEach(img => {
+              if (img.complete && img.naturalWidth > 0) done();
+              else {
+                img.addEventListener('load', done, { once: true });
+                img.addEventListener('error', done, { once: true });
+              }
+            });
+          })
+        });
         
         // Capture screenshot of visible tab viewport
-        const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+        const dataUrl = await safeCaptureVisibleTab(null, { format: 'png' });
         captures.push(dataUrl);
         
         if (scrollY >= totalHeight - viewportHeight) {
@@ -429,44 +467,81 @@ ${cleanedText}
         target: { tabId: tab.id },
         args: [captures, scrollPositions, viewportWidth, totalHeight, pixelRatio, tab.title],
         func: async (imgs, positions, w, h, ratio, rawTitle) => {
-          const canvas = document.createElement('canvas');
-          canvas.width = w * ratio;
-          canvas.height = h * ratio;
-          const ctx = canvas.getContext('2d');
-          
-          // Draw each capture piece onto the canvas
-          for (let i = 0; i < imgs.length; i++) {
-            const dataUrl = imgs[i];
-            const scrollY = positions[i];
-            
-            await new Promise((resolve) => {
+          // Preload all images to get exact physical dimensions
+          const loadedImages = await Promise.all(
+            imgs.map((dataUrl) => new Promise((resolve, reject) => {
               const img = new Image();
-              img.onload = () => {
-                ctx.drawImage(img, 0, scrollY * ratio);
-                resolve();
-              };
+              img.onload = () => resolve(img);
+              img.onerror = (e) => reject(new Error('이미지 조각 로드 실패: ' + e));
               img.src = dataUrl;
-            });
+            }))
+          );
+
+          if (loadedImages.length === 0) return;
+
+          const firstImg = loadedImages[0];
+          // Calculate exact scale from the first captured image to prevent any sub-pixel blur
+          const actualScale = firstImg.naturalWidth / w;
+          const finalWidth = firstImg.naturalWidth;
+          const finalHeight = Math.round(h * actualScale);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = finalWidth;
+          canvas.height = finalHeight;
+          const ctx = canvas.getContext('2d', { alpha: false });
+
+          // Maintain 1:1 crisp pixel sharpness (prevent blurring interpolation)
+          ctx.imageSmoothingEnabled = false;
+
+          // Draw each capture piece onto the canvas with exact integer coordinates
+          // 마지막 조각을 제외한 각 조각은 다음 스크롤 위치까지만 클리핑하여
+          // 겹침(overlap)으로 인한 빈 공간/검정 영역 방지
+          for (let i = 0; i < loadedImages.length; i++) {
+            const img = loadedImages[i];
+            const scrollY = positions[i];
+            const drawY = Math.round(scrollY * actualScale);
+
+            if (i < loadedImages.length - 1) {
+              // 비-마지막 조각: 다음 스크롤 위치까지만 그려 겹침 제거
+              const nextScrollY = positions[i + 1];
+              const clipH = Math.round((nextScrollY - scrollY) * actualScale);
+              ctx.drawImage(
+                img,
+                0, 0, img.naturalWidth, clipH,
+                0, drawY, img.naturalWidth, clipH
+              );
+            } else {
+              // 마지막 조각: 나머지 전체 영역을 그대로 그림
+              ctx.drawImage(
+                img,
+                0, 0, img.naturalWidth, img.naturalHeight,
+                0, drawY, img.naturalWidth, img.naturalHeight
+              );
+            }
           }
-          
-          // Convert canvas drawing to PNG dataURL
-          const mergedDataUrl = canvas.toDataURL('image/png');
-          
+
+          // Convert canvas drawing to high-quality PNG Blob
+          const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+          if (!blob) return;
+          const blobUrl = URL.createObjectURL(blob);
+
           // Download directly from client tab DOM context
           const sanitizeTitle = (rawTitle || 'screenshot')
             .replace(/[\\/:*?"<>|]/g, '_')
             .substring(0, 30);
-            
+
           const today = new Date();
           const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
           const filename = `${sanitizeTitle}_full_${dateStr}.png`;
-          
+
           const a = document.createElement('a');
-          a.href = mergedDataUrl;
+          a.href = blobUrl;
           a.download = filename;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
+
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
         }
       });
       

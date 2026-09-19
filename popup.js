@@ -580,6 +580,23 @@ ${cleanedText}
   // Helper for delay
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+  // Safe capture helper with retry backoff to avoid MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota
+  const safeCaptureVisibleTab = async (windowId = null, options = { format: 'png' }, maxRetries = 4) => {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await chrome.tabs.captureVisibleTab(windowId, options);
+      } catch (err) {
+        const isQuotaErr = err?.message && err.message.includes('MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND');
+        if (isQuotaErr && attempt < maxRetries - 1) {
+          // Wait before retrying (600ms, 900ms, 1200ms)
+          await sleep(600 + attempt * 300);
+          continue;
+        }
+        throw err;
+      }
+    }
+  };
+
   if (screenshotBtn) {
     // Show current tab URL name as target helper
     try {
@@ -669,11 +686,11 @@ ${cleanedText}
             }
           });
 
-          // Wait for rendering and lazy load images
-          await sleep(250);
+          // Wait for rendering and lazy load images (>=600ms to stay within Chrome capture quota)
+          await sleep(600);
 
-          // Capture visible tab
-          const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+          // Capture visible tab safely with quota backoff retry
+          const dataUrl = await safeCaptureVisibleTab(null, { format: 'png' });
           captures.push(dataUrl);
 
           // Break if we've reached the bottom
@@ -694,34 +711,55 @@ ${cleanedText}
         });
 
         // 4. Stitch images together on canvas
-        const canvas = document.createElement('canvas');
-        canvas.width = viewportWidth * pixelRatio;
-        canvas.height = totalHeight * pixelRatio;
-        const ctx = canvas.getContext('2d');
-
         showToast('🧩 이미지 조각 병합 중...');
 
-        // Load images sequentially and draw them
-        for (let i = 0; i < captures.length; i++) {
-          const dataUrl = captures[i];
-          const scrollY = scrollPositions[i];
-          
-          await new Promise((resolve, reject) => {
+        // Load all captured image parts to get exact physical dimensions
+        const loadedImages = await Promise.all(
+          captures.map((dataUrl) => new Promise((resolve, reject) => {
             const img = new Image();
-            img.onload = () => {
-              // Draw the screenshot onto the correct position
-              ctx.drawImage(img, 0, scrollY * pixelRatio);
-              resolve();
-            };
-            img.onerror = (err) => {
-              reject(err);
-            };
+            img.onload = () => resolve(img);
+            img.onerror = (e) => reject(new Error('이미지 조각 로드 실패: ' + e));
             img.src = dataUrl;
-          });
+          }))
+        );
+
+        if (loadedImages.length === 0) {
+          throw new Error('캡처된 이미지가 없습니다.');
         }
 
-        // 5. Download the final image
-        const mergedDataUrl = canvas.toDataURL('image/png');
+        const firstImg = loadedImages[0];
+        // Calculate exact scale from the first captured image to prevent any sub-pixel blur
+        const actualScale = firstImg.naturalWidth / viewportWidth;
+        const finalWidth = firstImg.naturalWidth;
+        const finalHeight = Math.round(totalHeight * actualScale);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = finalWidth;
+        canvas.height = finalHeight;
+        const ctx = canvas.getContext('2d', { alpha: false });
+
+        // Maintain 1:1 crisp pixel sharpness (prevent blurring interpolation)
+        ctx.imageSmoothingEnabled = false;
+
+        // Draw each screenshot piece onto canvas with exact integer coordinates
+        for (let i = 0; i < loadedImages.length; i++) {
+          const img = loadedImages[i];
+          const scrollY = scrollPositions[i];
+          const drawY = Math.round(scrollY * actualScale);
+
+          ctx.drawImage(
+            img,
+            0, 0, img.naturalWidth, img.naturalHeight,
+            0, drawY, img.naturalWidth, img.naturalHeight
+          );
+        }
+
+        // 5. Download the final image using high-quality Blob (avoids toDataURL memory/compression limits)
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+        if (!blob) {
+          throw new Error('캔버스 이미지 생성 실패 (메모리 부족 가능성)');
+        }
+        const blobUrl = URL.createObjectURL(blob);
         
         const sanitizeTitle = (tab.title || 'screenshot')
           .replace(/[\\/:*?"<>|]/g, '_')
@@ -736,10 +774,13 @@ ${cleanedText}
         const filename = `${sanitizeTitle}_full_${dateStr}.png`;
 
         await chrome.downloads.download({
-          url: mergedDataUrl,
+          url: blobUrl,
           filename: filename,
           saveAs: false
         });
+
+        // Revoke blob URL after download starts
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
 
         showToast('💾 캡처 파일 다운로드 시작!');
       } catch (err) {
