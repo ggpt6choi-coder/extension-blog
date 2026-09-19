@@ -6,8 +6,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   const copySpinner = document.getElementById('copy-spinner');
   
   const batchCount = document.getElementById('batch-count');
+  const batchWebCount = document.getElementById('batch-web-count');
   const batchBtn = document.getElementById('batch-btn');
   const batchSpinner = document.getElementById('batch-spinner');
+  const batchHtmlBtn = document.getElementById('batch-html-btn');
+  const batchHtmlSpinner = document.getElementById('batch-html-spinner');
+  const batchHtmlBtnText = document.getElementById('batch-html-btn-text');
   
   const htmlSaveBtn = document.getElementById('html-save-btn');
   const htmlSaveSpinner = document.getElementById('html-save-spinner');
@@ -175,7 +179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       // Enable HTML and PDF save buttons if it's not a chrome/system page
       if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://') && !tab.url.startsWith('about:')) {
-        htmlSaveBtn.disabled = false;
+        if (htmlSaveBtn) htmlSaveBtn.disabled = false;
         pdfSaveBtn.disabled = false;
         
         // Count images on active tab
@@ -195,7 +199,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                   .filter(src => {
                     if (!src) return false;
                     if (src.startsWith('data:')) {
-                      // Filter out extremely small spacer base64 data URLs
                       return src.length > 250;
                     }
                     return true;
@@ -221,7 +224,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           imageCount.textContent = '권한 부족 (file://)';
         }
       } else {
-        htmlSaveBtn.disabled = true;
+        if (htmlSaveBtn) htmlSaveBtn.disabled = true;
         pdfSaveBtn.disabled = true;
         imageCount.textContent = '지원 불가 페이지';
       }
@@ -229,7 +232,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       activeStatusBadge.textContent = '탭 정보 없음';
       activeStatusBadge.className = 'badge badge-error';
       copyBtn.disabled = true;
-      htmlSaveBtn.disabled = true;
+      if (htmlSaveBtn) htmlSaveBtn.disabled = true;
       pdfSaveBtn.disabled = true;
       imageCount.textContent = '탭 정보 없음';
     }
@@ -239,11 +242,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       url: ["*://m.blog.naver.com/*", "*://blog.naver.com/*"],
       currentWindow: true
     });
-    batchCount.textContent = `${naverTabs.length}개 탭 감지됨`;
-    if (naverTabs.length > 0) {
-      batchBtn.disabled = false;
-    } else {
-      batchBtn.disabled = true;
+    batchCount.textContent = `${naverTabs.length}개 감지됨`;
+    batchBtn.disabled = naverTabs.length === 0;
+
+    // Count all regular webpage tabs for Batch HTML Mode
+    const allTabsInWindow = await chrome.tabs.query({ currentWindow: true });
+    const validWebTabs = allTabsInWindow.filter(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
+    if (batchWebCount) {
+      batchWebCount.textContent = `${validWebTabs.length}개 감지됨`;
+    }
+    if (batchHtmlBtn) {
+      batchHtmlBtn.disabled = validWebTabs.length === 0;
     }
 
     // 3. Count open Naver Cafe tabs for Cafe Mode
@@ -474,6 +483,69 @@ ${cleanedText}
       copySpinner.style.display = 'none';
     }
   });
+
+  // Listen for background progress updates
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'BATCH_SAVE_HTML_PROGRESS') {
+      if (batchHtmlBtnText) {
+        batchHtmlBtnText.textContent = `[${msg.current}/${msg.total}] ${msg.status === 'downloaded' ? '완료' : '저장 중'}`;
+      }
+      if (msg.status === 'downloaded') {
+        showToast(`💾 [${msg.current}/${msg.total}] 다운로드 완료: ${msg.title}`);
+      } else {
+        showToast(`⏳ [${msg.current}/${msg.total}] 수집 중: ${msg.title}`);
+      }
+    } else if (msg.type === 'BATCH_SAVE_HTML_COMPLETE') {
+      if (batchHtmlBtnText) {
+        batchHtmlBtnText.textContent = 'HTML 일괄 저장';
+      }
+      if (batchHtmlBtn) batchHtmlBtn.disabled = false;
+      if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'none';
+      showToast(`🎉 총 ${msg.saved}개 탭 파일 다운로드 완료!`);
+    }
+  });
+
+  // Batch HTML (SingleFile) Download Event Handler
+  if (batchHtmlBtn) {
+    batchHtmlBtn.addEventListener('click', async () => {
+      try {
+        const allTabs = await chrome.tabs.query({ currentWindow: true });
+        const validWebTabs = allTabs.filter(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
+        
+        if (validWebTabs.length === 0) {
+          showToast('저장할 일반 웹페이지 탭이 없습니다.', true);
+          return;
+        }
+
+        batchHtmlBtn.disabled = true;
+        batchHtmlSpinner.style.display = 'inline-block';
+        if (batchHtmlBtnText) {
+          batchHtmlBtnText.textContent = `[0/${validWebTabs.length}] 시작...`;
+        }
+        showToast(`🚀 ${validWebTabs.length}개 탭 일괄 저장을 시작합니다...`);
+
+        const resp = await chrome.runtime.sendMessage({
+          type: 'BATCH_SAVE_HTML_TABS',
+          tabIds: validWebTabs.map(t => t.id)
+        });
+
+        if (resp && resp.success) {
+          showToast(`🎉 총 ${resp.saved}개 탭 저장 완료!`);
+        } else {
+          showToast('일괄 저장 처리 중 오류가 발생했습니다.', true);
+        }
+      } catch (err) {
+        console.error('Batch HTML save failed:', err);
+        showToast('일괄 저장 중 오류가 발생했습니다.', true);
+      } finally {
+        batchHtmlBtn.disabled = false;
+        batchHtmlSpinner.style.display = 'none';
+        if (batchHtmlBtnText) {
+          batchHtmlBtnText.textContent = 'HTML 일괄 저장';
+        }
+      }
+    });
+  }
 
   // Batch Export & Download Event Handler
   batchBtn.addEventListener('click', async () => {
@@ -793,55 +865,267 @@ ${cleanedText}
     });
   }
 
-  // HTML Download Event Handler
+  // HTML Download Event Handler (SingleFile Complete Inliner Engine)
   if (htmlSaveBtn) {
     htmlSaveBtn.addEventListener('click', async () => {
       if (!currentTab) return;
       
       htmlSaveBtn.disabled = true;
       htmlSaveSpinner.style.display = 'inline-block';
+      showToast('🎨 SingleFile 생성 시작: 스타일 & 이미지 수집 중...');
       
       try {
-        // Inject script to get the whole page HTML
         const [result] = await chrome.scripting.executeScript({
           target: { tabId: currentTab.id },
-          func: () => {
-            return document.documentElement.outerHTML;
+          func: async () => {
+            // Toast notification inside the web page
+            const showWebToast = (msg, isErr = false) => {
+              let t = document.getElementById('__singlefile_toast');
+              if (!t) {
+                t = document.createElement('div');
+                t.id = '__singlefile_toast';
+                t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2147483647;background:rgba(24,24,27,0.92);color:#fff;padding:12px 18px;border-radius:8px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,0.3);display:flex;align-items:center;gap:8px;backdrop-filter:blur(4px);transition:opacity 0.3s;';
+                document.body.appendChild(t);
+              }
+              t.style.background = isErr ? 'rgba(220,38,38,0.92)' : 'rgba(24,24,27,0.92)';
+              t.textContent = msg;
+              t.style.opacity = '1';
+              if (isErr) setTimeout(() => { if (t) t.style.opacity = '0'; }, 4000);
+            };
+
+            const removeWebToast = () => {
+              const t = document.getElementById('__singlefile_toast');
+              if (t) {
+                t.style.opacity = '0';
+                setTimeout(() => t.remove(), 400);
+              }
+            };
+
+            try {
+              showWebToast('📦 단일 HTML 생성 중: 문서 복제 및 정리...');
+
+              // 1. Clone document
+              const docClone = document.documentElement.cloneNode(true);
+
+              // 2. Remove scripts and unwanted elements to prevent offline re-execution/redirection
+              docClone.querySelectorAll('script, noscript, template').forEach(el => el.remove());
+
+              // Ensure UTF-8 meta charset
+              let head = docClone.querySelector('head');
+              if (!head) {
+                head = document.createElement('head');
+                docClone.insertBefore(head, docClone.firstChild);
+              }
+              let metaCharset = head.querySelector('meta[charset]');
+              if (!metaCharset) {
+                metaCharset = document.createElement('meta');
+                metaCharset.setAttribute('charset', 'utf-8');
+                head.insertBefore(metaCharset, head.firstChild);
+              }
+
+              // Convert relative <a> links to absolute
+              docClone.querySelectorAll('a[href]').forEach(a => {
+                try {
+                  a.href = a.href;
+                } catch (e) {}
+              });
+
+              // Helper: Process CSS url(...) to Base64
+              const processCssUrls = async (css, baseUrl) => {
+                if (!css) return '';
+                const urlRegex = /url\(\s*(['"]?)(.*?)\1\s*\)/gi;
+                const matches = [];
+                let match;
+                while ((match = urlRegex.exec(css)) !== null) {
+                  const rawUrl = match[2].trim();
+                  if (rawUrl && !rawUrl.startsWith('data:') && !rawUrl.startsWith('#')) {
+                    matches.push(rawUrl);
+                  }
+                }
+
+                const uniqueUrls = [...new Set(matches)].slice(0, 40);
+                const urlMap = new Map();
+
+                await Promise.all(uniqueUrls.map(async (u) => {
+                  try {
+                    const absUrl = new URL(u, baseUrl).href;
+                    const resp = await chrome.runtime.sendMessage({ type: 'FETCH_RESOURCE_AS_DATA_URL', url: absUrl });
+                    if (resp && resp.success && resp.dataUrl) {
+                      urlMap.set(u, resp.dataUrl);
+                    }
+                  } catch (e) {}
+                }));
+
+                return css.replace(urlRegex, (fullMatch, quote, rawUrl) => {
+                  const clean = rawUrl.trim();
+                  if (urlMap.has(clean)) {
+                    return `url("${urlMap.get(clean)}")`;
+                  }
+                  try {
+                    return `url("${new URL(clean, baseUrl).href}")`;
+                  } catch (e) {
+                    return fullMatch;
+                  }
+                });
+              };
+
+              // 3. Inline External Stylesheets (<link rel="stylesheet">)
+              showWebToast('🎨 외부 스타일시트(CSS) 및 폰트 인라인화 중...');
+              const linkTags = Array.from(document.querySelectorAll('link[rel~="stylesheet"]'));
+              const linkCloneTags = Array.from(docClone.querySelectorAll('link[rel~="stylesheet"]'));
+
+              for (let i = 0; i < linkTags.length; i++) {
+                const origLink = linkTags[i];
+                const cloneLink = linkCloneTags[i];
+                if (!cloneLink) continue;
+
+                const href = origLink.href;
+                if (!href) continue;
+
+                let cssText = '';
+                try {
+                  const sheet = Array.from(document.styleSheets).find(s => s.href === href);
+                  if (sheet && sheet.cssRules) {
+                    cssText = Array.from(sheet.cssRules).map(r => r.cssText).join('\n');
+                  }
+                } catch (e) {}
+
+                if (!cssText) {
+                  try {
+                    const resp = await chrome.runtime.sendMessage({ type: 'FETCH_RESOURCE_AS_TEXT', url: href });
+                    if (resp && resp.success && resp.text) {
+                      cssText = resp.text;
+                    }
+                  } catch (e) {}
+                }
+
+                if (cssText) {
+                  cssText = await processCssUrls(cssText, href);
+                  const styleTag = document.createElement('style');
+                  styleTag.setAttribute('data-original-href', href);
+                  styleTag.textContent = cssText;
+                  cloneLink.replaceWith(styleTag);
+                }
+              }
+
+              // Process existing <style> tags
+              const existingStyles = Array.from(docClone.querySelectorAll('style'));
+              for (const style of existingStyles) {
+                if (style.textContent && style.textContent.includes('url(')) {
+                  style.textContent = await processCssUrls(style.textContent, document.baseURI);
+                }
+              }
+
+              // 4. Inline Images (<img>)
+              showWebToast('🖼️ 이미지 Base64 변환 및 인라인화 중...');
+              const origImgs = Array.from(document.querySelectorAll('img'));
+              const cloneImgs = Array.from(docClone.querySelectorAll('img'));
+
+              const CHUNK_SIZE = 12;
+              for (let i = 0; i < origImgs.length; i += CHUNK_SIZE) {
+                const sliceOrig = origImgs.slice(i, i + CHUNK_SIZE);
+                const sliceClone = cloneImgs.slice(i, i + CHUNK_SIZE);
+
+                await Promise.all(sliceOrig.map(async (orig, idx) => {
+                  const clone = sliceClone[idx];
+                  if (!clone) return;
+
+                  let src = orig.currentSrc || orig.src || orig.getAttribute('data-src') || orig.getAttribute('data-lazy-src') || orig.getAttribute('data-original');
+                  if (!src || src.startsWith('data:')) {
+                    clone.removeAttribute('srcset');
+                    clone.removeAttribute('loading');
+                    return;
+                  }
+
+                  try {
+                    src = new URL(src, document.baseURI).href;
+                  } catch (e) {}
+
+                  let dataUrl = null;
+
+                  // Try fast canvas conversion first if image is already loaded
+                  if (orig.complete && orig.naturalWidth > 0 && orig.naturalHeight > 0) {
+                    try {
+                      const canvas = document.createElement('canvas');
+                      canvas.width = orig.naturalWidth;
+                      canvas.height = orig.naturalHeight;
+                      const ctx = canvas.getContext('2d');
+                      ctx.drawImage(orig, 0, 0);
+                      dataUrl = canvas.toDataURL('image/png');
+                    } catch (e) {
+                      // Tainted canvas -> fallback to background fetch
+                    }
+                  }
+
+                  if (!dataUrl) {
+                    try {
+                      const resp = await chrome.runtime.sendMessage({ type: 'FETCH_RESOURCE_AS_DATA_URL', url: src });
+                      if (resp && resp.success && resp.dataUrl) {
+                        dataUrl = resp.dataUrl;
+                      }
+                    } catch (e) {}
+                  }
+
+                  if (dataUrl) {
+                    clone.src = dataUrl;
+                  } else {
+                    clone.src = src;
+                  }
+                  clone.removeAttribute('srcset');
+                  clone.removeAttribute('loading');
+                }));
+              }
+
+              // 5. Inline background images in style attributes
+              const elementsWithInlineStyle = Array.from(docClone.querySelectorAll('[style*="url("]'));
+              for (const el of elementsWithInlineStyle) {
+                const currentStyle = el.getAttribute('style');
+                if (currentStyle) {
+                  el.setAttribute('style', await processCssUrls(currentStyle, document.baseURI));
+                }
+              }
+
+              // 6. Build Final HTML & Trigger Client Download
+              showWebToast('💾 SingleFile 저장 및 다운로드 시작!');
+              const finalHtml = '<!DOCTYPE html>\n' + docClone.outerHTML;
+              const blob = new Blob([finalHtml], { type: 'text/html;charset=utf-8' });
+              const blobUrl = URL.createObjectURL(blob);
+
+              const sanitizeTitle = (document.title || 'webpage')
+                .replace(/[\\/:*?"<>|]/g, '_')
+                .substring(0, 30);
+              const today = new Date();
+              const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+              const filename = `${sanitizeTitle}_${dateStr}.html`;
+
+              const a = document.createElement('a');
+              a.href = blobUrl;
+              a.download = filename;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+
+              setTimeout(() => {
+                URL.revokeObjectURL(blobUrl);
+                removeWebToast();
+              }, 5000);
+
+              return { success: true, filename };
+            } catch (err) {
+              showWebToast(`❌ SingleFile 저장 실패: ${err.message}`, true);
+              throw err;
+            }
           }
         });
-        
-        if (result && result.result) {
-          const htmlContent = `<!DOCTYPE html>\n${result.result}`;
-          const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          
-          const sanitizeTitle = (currentTab.title || 'webpage')
-            .replace(/[\\/:*?"<>|]/g, '_')
-            .substring(0, 30);
-            
-          const today = new Date();
-          const yyyy = today.getFullYear();
-          const mm = String(today.getMonth() + 1).padStart(2, '0');
-          const dd = String(today.getDate()).padStart(2, '0');
-          const dateStr = `${yyyy}-${mm}-${dd}`;
-          
-          const filename = `${sanitizeTitle}_${dateStr}.html`;
-          
-          await chrome.downloads.download({
-            url: url,
-            filename: filename,
-            saveAs: false
-          });
-          
-          // Cleanup Object URL
-          setTimeout(() => URL.revokeObjectURL(url), 60000);
-          showToast('💾 HTML 파일 다운로드 시작!');
+
+        if (result && result.result && result.result.success) {
+          showToast(`💾 SingleFile (${result.result.filename}) 저장 완료!`);
         } else {
           showToast('HTML 소스를 가져오지 못했습니다.', true);
         }
       } catch (err) {
-        console.error('HTML save failed:', err);
-        showToast('HTML 저장 중 오류가 발생했습니다.', true);
+        console.error('HTML SingleFile save failed:', err);
+        showToast('SingleFile 저장 중 오류가 발생했습니다.', true);
       } finally {
         htmlSaveBtn.disabled = false;
         htmlSaveSpinner.style.display = 'none';

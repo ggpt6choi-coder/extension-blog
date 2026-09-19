@@ -83,6 +83,276 @@ function showWebToast(tabId, message, isError = false) {
   });
 }
 
+// SingleFile Inliner Engine injected into web pages
+const singleFileInlinerFunction = async (tabIndexInfo = null, isBatch = false) => {
+  const showWebToast = (msg, isErr = false) => {
+    let t = document.getElementById('__singlefile_toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = '__singlefile_toast';
+      t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2147483647;background:rgba(24,24,27,0.92);color:#fff;padding:12px 18px;border-radius:8px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,0.3);display:flex;align-items:center;gap:8px;backdrop-filter:blur(4px);transition:opacity 0.3s;';
+      document.body.appendChild(t);
+    }
+    t.style.background = isErr ? 'rgba(220,38,38,0.92)' : 'rgba(24,24,27,0.92)';
+    t.textContent = tabIndexInfo ? `[${tabIndexInfo}] ${msg}` : msg;
+    t.style.opacity = '1';
+    if (isErr) setTimeout(() => { if (t) t.style.opacity = '0'; }, 4000);
+  };
+
+  const removeWebToast = () => {
+    const t = document.getElementById('__singlefile_toast');
+    if (t) {
+      t.style.opacity = '0';
+      setTimeout(() => t.remove(), 400);
+    }
+  };
+
+  try {
+    showWebToast('📦 문서 및 프레임 분석 중...');
+
+    // 1. Detect inner content iframe for Naver Blog PC (#mainFrame) or Naver Cafe (#cafe_main)
+    let targetDoc = document;
+    const iframe = document.getElementById('mainFrame') || 
+                   document.getElementById('cafe_main') || 
+                   document.querySelector('iframe[name="mainFrame"]') ||
+                   document.querySelector('iframe[name="cafe_main"]');
+
+    if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
+      targetDoc = iframe.contentDocument;
+    }
+
+    // 2. Clone document from targetDoc
+    const docClone = targetDoc.documentElement.cloneNode(true);
+
+    // 3. Clean up scripts and remove any toast notification elements from clone
+    docClone.querySelectorAll('script, noscript, template, #__singlefile_toast, #nblm-toast-notification').forEach(el => el.remove());
+
+    let head = docClone.querySelector('head');
+    if (!head) {
+      head = targetDoc.createElement('head');
+      docClone.insertBefore(head, docClone.firstChild);
+    }
+    let metaCharset = head.querySelector('meta[charset]');
+    if (!metaCharset) {
+      metaCharset = targetDoc.createElement('meta');
+      metaCharset.setAttribute('charset', 'utf-8');
+      head.insertBefore(metaCharset, head.firstChild);
+    }
+
+    // Ensure proper title
+    let titleEl = head.querySelector('title');
+    if (!titleEl || !titleEl.textContent.trim()) {
+      if (!titleEl) {
+        titleEl = targetDoc.createElement('title');
+        head.appendChild(titleEl);
+      }
+      titleEl.textContent = document.title || 'webpage';
+    }
+
+    // Convert relative <a> links to absolute
+    docClone.querySelectorAll('a[href]').forEach(a => {
+      try { a.href = a.href; } catch (e) {}
+    });
+
+    const processCssUrls = async (css, baseUrl) => {
+      if (!css) return '';
+      const urlRegex = /url\(\s*(['"]?)(.*?)\1\s*\)/gi;
+      const matches = [];
+      let match;
+      while ((match = urlRegex.exec(css)) !== null) {
+        const rawUrl = match[2].trim();
+        if (rawUrl && !rawUrl.startsWith('data:') && !rawUrl.startsWith('#')) {
+          matches.push(rawUrl);
+        }
+      }
+
+      const uniqueUrls = [...new Set(matches)].slice(0, 40);
+      const urlMap = new Map();
+
+      await Promise.all(uniqueUrls.map(async (u) => {
+        try {
+          const absUrl = new URL(u, baseUrl).href;
+          const resp = await chrome.runtime.sendMessage({ type: 'FETCH_RESOURCE_AS_DATA_URL', url: absUrl });
+          if (resp && resp.success && resp.dataUrl) {
+            urlMap.set(u, resp.dataUrl);
+          }
+        } catch (e) {}
+      }));
+
+      return css.replace(urlRegex, (fullMatch, quote, rawUrl) => {
+        const clean = rawUrl.trim();
+        if (urlMap.has(clean)) {
+          return `url("${urlMap.get(clean)}")`;
+        }
+        try {
+          return `url("${new URL(clean, baseUrl).href}")`;
+        } catch (e) {
+          return fullMatch;
+        }
+      });
+    };
+
+    // 4. Inline External Stylesheets (<link rel="stylesheet">)
+    showWebToast('🎨 외부 스타일시트(CSS) 및 폰트 인라인화 중...');
+    const linkTags = Array.from(targetDoc.querySelectorAll('link[rel~="stylesheet"]'));
+    const linkCloneTags = Array.from(docClone.querySelectorAll('link[rel~="stylesheet"]'));
+
+    for (let i = 0; i < linkTags.length; i++) {
+      const origLink = linkTags[i];
+      const cloneLink = linkCloneTags[i];
+      if (!cloneLink) continue;
+
+      const href = origLink.href;
+      if (!href) continue;
+
+      let cssText = '';
+      try {
+        const sheet = Array.from(targetDoc.styleSheets).find(s => s.href === href);
+        if (sheet && sheet.cssRules) {
+          cssText = Array.from(sheet.cssRules).map(r => r.cssText).join('\n');
+        }
+      } catch (e) {}
+
+      if (!cssText) {
+        try {
+          const resp = await chrome.runtime.sendMessage({ type: 'FETCH_RESOURCE_AS_TEXT', url: href });
+          if (resp && resp.success && resp.text) {
+            cssText = resp.text;
+          }
+        } catch (e) {}
+      }
+
+      if (cssText) {
+        cssText = await processCssUrls(cssText, href);
+        const styleTag = targetDoc.createElement('style');
+        styleTag.setAttribute('data-original-href', href);
+        styleTag.textContent = cssText;
+        cloneLink.replaceWith(styleTag);
+      }
+    }
+
+    const existingStyles = Array.from(docClone.querySelectorAll('style'));
+    for (const style of existingStyles) {
+      if (style.textContent && style.textContent.includes('url(')) {
+        style.textContent = await processCssUrls(style.textContent, targetDoc.baseURI);
+      }
+    }
+
+    // 5. Inline Images (<img>) with SmartEditor / Lazy-load support
+    showWebToast('🖼️ 이미지 Base64 변환 및 인라인화 중...');
+    const origImgs = Array.from(targetDoc.querySelectorAll('img'));
+    const cloneImgs = Array.from(docClone.querySelectorAll('img'));
+
+    const CHUNK_SIZE = 12;
+    for (let i = 0; i < origImgs.length; i += CHUNK_SIZE) {
+      const sliceOrig = origImgs.slice(i, i + CHUNK_SIZE);
+      const sliceClone = cloneImgs.slice(i, i + CHUNK_SIZE);
+
+      await Promise.all(sliceOrig.map(async (orig, idx) => {
+        const clone = sliceClone[idx];
+        if (!clone) return;
+
+        // Check data-src, data-lazy-src first to avoid 1x1 transparent spacer gifs
+        let src = orig.getAttribute('data-src') || 
+                  orig.getAttribute('data-lazy-src') || 
+                  orig.getAttribute('data-original') || 
+                  orig.getAttribute('lazy-src') || 
+                  orig.currentSrc || 
+                  orig.src;
+
+        if (src && src.startsWith('data:image/gif')) {
+          src = orig.getAttribute('data-src') || orig.getAttribute('data-lazy-src') || orig.getAttribute('lazy-src') || orig.src;
+        }
+
+        if (!src || src.startsWith('data:')) {
+          clone.removeAttribute('srcset');
+          clone.removeAttribute('loading');
+          return;
+        }
+
+        try {
+          src = new URL(src, targetDoc.baseURI).href;
+        } catch (e) {}
+
+        let dataUrl = null;
+        if (orig.complete && orig.naturalWidth > 0 && orig.naturalHeight > 0) {
+          try {
+            const canvas = targetDoc.createElement('canvas');
+            canvas.width = orig.naturalWidth;
+            canvas.height = orig.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(orig, 0, 0);
+            dataUrl = canvas.toDataURL('image/png');
+          } catch (e) {}
+        }
+
+        if (!dataUrl) {
+          try {
+            const resp = await chrome.runtime.sendMessage({ type: 'FETCH_RESOURCE_AS_DATA_URL', url: src });
+            if (resp && resp.success && resp.dataUrl) {
+              dataUrl = resp.dataUrl;
+            }
+          } catch (e) {}
+        }
+
+        if (dataUrl) {
+          clone.src = dataUrl;
+        } else {
+          clone.src = src;
+        }
+        clone.removeAttribute('srcset');
+        clone.removeAttribute('loading');
+      }));
+    }
+
+    const elementsWithInlineStyle = Array.from(docClone.querySelectorAll('[style*="url("]'));
+    for (const el of elementsWithInlineStyle) {
+      const currentStyle = el.getAttribute('style');
+      if (currentStyle) {
+        el.setAttribute('style', await processCssUrls(currentStyle, targetDoc.baseURI));
+      }
+    }
+
+    // Ensure toast is removed from clone before building final HTML
+    docClone.querySelectorAll('#__singlefile_toast, #nblm-toast-notification').forEach(el => el.remove());
+
+    showWebToast('💾 SingleFile 패키징 완료!');
+    const finalHtml = '<!DOCTYPE html>\n' + docClone.outerHTML;
+
+    const sanitizeTitle = (document.title || targetDoc.title || 'webpage')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .substring(0, 30);
+    const today = new Date();
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const filename = `${sanitizeTitle}_${dateStr}.html`;
+
+    // Only do in-tab a.click download if NOT in batch mode
+    if (!isBatch) {
+      const blob = new Blob([finalHtml], { type: 'text/html;charset=utf-8' });
+      const blobUrl = URL.createObjectURL(blob);
+      const a = targetDoc.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      targetDoc.body.appendChild(a);
+      a.click();
+      targetDoc.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+    }
+
+    setTimeout(removeWebToast, 3000);
+
+    return { 
+      success: true, 
+      filename, 
+      htmlContent: finalHtml, 
+      title: sanitizeTitle 
+    };
+  } catch (err) {
+    showWebToast(`❌ SingleFile 저장 실패: ${err.message}`, true);
+    throw err;
+  }
+};
+
 // Global Hotkeys Command Listener
 chrome.commands.onCommand.addListener(async (command) => {
   try {
@@ -244,39 +514,13 @@ ${cleanedText}
     } 
     
     else if (command === 'save-html') {
-      showWebToast(tab.id, '⏳ HTML 소스 파일 빌드 중...');
-      
-      const [result] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => {
-          return document.documentElement.outerHTML;
-        }
-      });
-      
-      if (result && result.result) {
-        const htmlContent = `<!DOCTYPE html>\n${result.result}`;
-        
-        // Base64 encoding to download from Service Worker without URL.createObjectURL
-        // Use btoa with encodeURIComponent to support UTF-8 characters safely
-        const base64Html = btoa(unescape(encodeURIComponent(htmlContent)));
-        const dataUrl = `data:text/html;base64,${base64Html}`;
-        
-        const sanitizeTitle = (tab.title || 'webpage')
-          .replace(/[\\/:*?"<>|]/g, '_')
-          .substring(0, 30);
-          
-        const today = new Date();
-        const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-        const filename = `${sanitizeTitle}_${dateStr}.html`;
-        
-        await chrome.downloads.download({
-          url: dataUrl,
-          filename: filename,
-          saveAs: false
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: singleFileInlinerFunction
         });
-        showWebToast(tab.id, '💾 HTML 파일 다운로드 시작!');
-      } else {
-        showWebToast(tab.id, '❌ HTML 추출 실패', true);
+      } catch (err) {
+        showWebToast(tab.id, '❌ HTML 추출 실패: ' + (err.message || err), true);
       }
     } 
     
@@ -857,6 +1101,136 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === 'GET_AUTO_COMMENT_STATE') {
     sendResponse({ state: autoCommentState });
+    return true;
+  }
+
+  // SingleFile Resource Fetchers (CORS-free via background service worker with 3.5s timeout)
+  if (message.type === 'FETCH_RESOURCE_AS_DATA_URL') {
+    (async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      try {
+        const res = await fetch(message.url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const mimeType = res.headers.get('content-type') || 'image/png';
+        const buffer = await res.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        const chunkSize = 8192;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+        }
+        const base64 = btoa(binary);
+        sendResponse({ success: true, dataUrl: `data:${mimeType};base64,${base64}` });
+      } catch (err) {
+        clearTimeout(timeoutId);
+        sendResponse({ success: false, error: err.message });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'FETCH_RESOURCE_AS_TEXT') {
+    (async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      try {
+        const res = await fetch(message.url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        sendResponse({ success: true, text });
+      } catch (err) {
+        clearTimeout(timeoutId);
+        sendResponse({ success: false, error: err.message });
+      }
+    })();
+    return true;
+  }
+
+  // Batch Save HTML across multiple tabs (Instant per-tab download via chrome.downloads API)
+  if (message.type === 'BATCH_SAVE_HTML_TABS') {
+    (async () => {
+      const tabIds = message.tabIds || [];
+      let successCount = 0;
+
+      for (let i = 0; i < tabIds.length; i++) {
+        const tabId = tabIds[i];
+        let tabTitle = '페이지';
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          if (tab && tab.title) tabTitle = tab.title;
+        } catch (e) {}
+
+        // Broadcast start of current tab
+        chrome.runtime.sendMessage({
+          type: 'BATCH_SAVE_HTML_PROGRESS',
+          current: i + 1,
+          total: tabIds.length,
+          title: tabTitle,
+          status: 'processing'
+        }).catch(() => {});
+
+        try {
+          // Execute inliner inside tab and get complete HTML string
+          const [execResult] = await chrome.scripting.executeScript({
+            target: { tabId },
+            args: [`${i + 1}/${tabIds.length}`, true],
+            func: singleFileInlinerFunction
+          });
+
+          if (execResult && execResult.result && execResult.result.htmlContent) {
+            const res = execResult.result;
+            
+            // Convert HTML to Data URL for Service Worker download
+            const encoder = new TextEncoder();
+            const bytes = encoder.encode(res.htmlContent);
+            let binary = '';
+            const chunkSize = 8192;
+            for (let j = 0; j < bytes.length; j += chunkSize) {
+              binary += String.fromCharCode.apply(null, bytes.subarray(j, j + chunkSize));
+            }
+            const base64Html = btoa(binary);
+            const dataUrl = `data:text/html;charset=utf-8;base64,${base64Html}`;
+
+            // Trigger Chrome Download directly from background service worker
+            await chrome.downloads.download({
+              url: dataUrl,
+              filename: res.filename,
+              saveAs: false
+            });
+
+            successCount++;
+
+            // Broadcast download complete for this tab
+            chrome.runtime.sendMessage({
+              type: 'BATCH_SAVE_HTML_PROGRESS',
+              current: i + 1,
+              total: tabIds.length,
+              title: res.title || tabTitle,
+              status: 'downloaded'
+            }).catch(() => {});
+          }
+
+          // Short delay between tabs to prevent browser congestion
+          if (i < tabIds.length - 1) {
+            await new Promise(r => setTimeout(r, 600));
+          }
+        } catch (err) {
+          console.error(`Batch save tab ${tabId} failed:`, err);
+        }
+      }
+
+      // Broadcast all tabs complete
+      chrome.runtime.sendMessage({
+        type: 'BATCH_SAVE_HTML_COMPLETE',
+        total: tabIds.length,
+        saved: successCount
+      }).catch(() => {});
+
+      sendResponse({ success: true, total: tabIds.length, saved: successCount });
+    })();
     return true;
   }
 });

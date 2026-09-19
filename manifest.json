@@ -12,9 +12,7 @@
     "debugger"
   ],
   "host_permissions": [
-    "*://m.blog.naver.com/*",
-    "*://blog.naver.com/*",
-    "*://cafe.naver.com/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

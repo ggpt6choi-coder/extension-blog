@@ -505,24 +505,17 @@
           <span class="detail-value" id="active-url">-</span>
         </div>
       </div>
-      <div style="display: flex; flex-direction: column; gap: 8px;">
-        <button class="btn btn-primary" id="copy-btn" disabled style="padding: 9px 12px; font-size: 13px;">
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-primary" id="copy-btn" disabled style="flex: 1.3; padding: 9px 12px; font-size: 13px;">
           <span class="spinner" id="copy-spinner"></span>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
           <span>텍스트 복사</span>
         </button>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn btn-secondary" id="html-save-btn" disabled style="flex: 1; padding: 8px 8px; font-size: 12px;">
-            <span class="spinner" id="html-save-spinner"></span>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            <span>HTML 저장</span>
-          </button>
-          <button class="btn btn-secondary" id="pdf-save-btn" disabled style="flex: 1; padding: 8px 8px; font-size: 12px;">
-            <span class="spinner" id="pdf-save-spinner"></span>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-            <span>PDF 저장</span>
-          </button>
-        </div>
+        <button class="btn btn-secondary" id="pdf-save-btn" disabled style="flex: 1; padding: 9px 10px; font-size: 12px;">
+          <span class="spinner" id="pdf-save-spinner"></span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          <span>PDF 저장</span>
+        </button>
       </div>
     </div>
 
@@ -533,15 +526,26 @@
       </div>
       <div class="detail-info">
         <div class="detail-row-horizontal">
-          <span class="detail-label">감지된 네이버 블로그 탭</span>
-          <span class="detail-value" id="batch-count">0개 탭 감지됨</span>
+          <span class="detail-label">열린 웹페이지 탭</span>
+          <span class="detail-value" id="batch-web-count">0개 감지됨</span>
+        </div>
+        <div class="detail-row-horizontal" style="margin-top: 4px;">
+          <span class="detail-label">네이버 블로그 탭</span>
+          <span class="detail-value" id="batch-count">0개 감지됨</span>
         </div>
       </div>
-      <button class="btn btn-secondary" id="batch-btn" disabled>
-        <span class="spinner" id="batch-spinner"></span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-        <span>일괄 다운로드 (.txt)</span>
-      </button>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-secondary" id="batch-html-btn" disabled style="flex: 1; padding: 9px 8px; font-size: 12px;">
+          <span class="spinner" id="batch-html-spinner"></span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          <span id="batch-html-btn-text">HTML 일괄 저장</span>
+        </button>
+        <button class="btn btn-secondary" id="batch-btn" disabled style="flex: 1; padding: 9px 8px; font-size: 12px;">
+          <span class="spinner" id="batch-spinner"></span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          <span>블로그 일괄 (.txt)</span>
+        </button>
+      </div>
     </div>
 
     <!-- Screenshot Mode Card -->
