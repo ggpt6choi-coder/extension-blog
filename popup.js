@@ -17,6 +17,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const htmlSaveSpinner = document.getElementById('html-save-spinner');
   const pdfSaveBtn = document.getElementById('pdf-save-btn');
   const pdfSaveSpinner = document.getElementById('pdf-save-spinner');
+  const pdfSaveBtnText = document.getElementById('pdf-save-btn-text');
+  const pdfBatchCheckbox = document.getElementById('pdf-batch-checkbox');
+  const pdfBatchTabCount = document.getElementById('pdf-batch-tab-count');
 
   const imageCount = document.getElementById('image-count');
   const imageDownloadBtn = document.getElementById('image-download-btn');
@@ -250,6 +253,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const validWebTabs = allTabsInWindow.filter(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
     if (batchWebCount) {
       batchWebCount.textContent = `${validWebTabs.length}개 감지됨`;
+    }
+    if (pdfBatchTabCount) {
+      pdfBatchTabCount.textContent = `${validWebTabs.length}`;
     }
     if (batchHtmlBtn) {
       batchHtmlBtn.disabled = validWebTabs.length === 0;
@@ -502,6 +508,26 @@ ${cleanedText}
       if (batchHtmlBtn) batchHtmlBtn.disabled = false;
       if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'none';
       showToast(`🎉 총 ${msg.saved}개 탭 파일 다운로드 완료!`);
+    }
+
+    // PDF Batch Progress Updates
+    if (msg.type === 'BATCH_SAVE_PDF_PROGRESS') {
+      if (pdfSaveBtnText) {
+        pdfSaveBtnText.textContent = `[${msg.current}/${msg.total}] ${msg.status === 'downloaded' ? '완료' : '저장 중'}`;
+      }
+      if (msg.status === 'downloaded') {
+        showToast(`📄 [${msg.current}/${msg.total}] PDF 저장 완료: ${msg.title}`);
+      } else {
+        showToast(`⏳ [${msg.current}/${msg.total}] PDF 생성 중: ${msg.title}`);
+      }
+    } else if (msg.type === 'BATCH_SAVE_PDF_COMPLETE') {
+      if (pdfSaveBtnText) {
+        const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
+        pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
+      }
+      if (pdfSaveBtn) pdfSaveBtn.disabled = false;
+      if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
+      showToast(`🎉 총 ${msg.saved}개 탭 PDF 저장 완료!`);
     }
   });
 
@@ -1133,81 +1159,108 @@ ${cleanedText}
     });
   }
 
-  // PDF Download Event Handler
+  // PDF Batch Checkbox Toggle Handler
+  if (pdfBatchCheckbox) {
+    pdfBatchCheckbox.addEventListener('change', () => {
+      if (!pdfSaveBtnText) return;
+      if (pdfBatchCheckbox.checked) {
+        const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '0';
+        pdfSaveBtnText.textContent = `PDF 일괄 저장 (${count}개)`;
+        if (pdfSaveBtn) pdfSaveBtn.disabled = false;
+      } else {
+        pdfSaveBtnText.textContent = 'PDF 저장';
+      }
+    });
+  }
+
+  // PDF Download Event Handler (with auto mobile conversion & batch checkbox support)
   if (pdfSaveBtn) {
     pdfSaveBtn.addEventListener('click', async () => {
+      // 1. Batch Mode if Checkbox is checked
+      if (pdfBatchCheckbox && pdfBatchCheckbox.checked) {
+        try {
+          const allTabs = await chrome.tabs.query({ currentWindow: true });
+          const validTabs = allTabs.filter(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
+          if (validTabs.length === 0) {
+            showToast('저장할 웹페이지 탭이 없습니다.', true);
+            return;
+          }
+
+          pdfSaveBtn.disabled = true;
+          pdfSaveSpinner.style.display = 'inline-block';
+          if (pdfSaveBtnText) {
+            pdfSaveBtnText.textContent = `[0/${validTabs.length}] 시작...`;
+          }
+          showToast(`🚀 ${validTabs.length}개 탭 PDF 일괄 저장을 시작합니다...`);
+
+          const resp = await chrome.runtime.sendMessage({
+            type: 'BATCH_SAVE_PDF_TABS',
+            tabIds: validTabs.map(t => t.id)
+          });
+
+          if (resp && resp.success) {
+            showToast(`🎉 총 ${resp.saved}개 탭 PDF 저장 완료!`);
+          } else {
+            showToast('일괄 저장 처리 중 오류가 발생했습니다.', true);
+          }
+        } catch (err) {
+          console.error('Batch PDF save failed:', err);
+          showToast('일괄 저장 처리 중 오류가 발생했습니다.', true);
+        } finally {
+          pdfSaveBtn.disabled = false;
+          pdfSaveSpinner.style.display = 'none';
+          if (pdfSaveBtnText) {
+            const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
+            pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
+          }
+        }
+        return;
+      }
+
+      // 2. Single Tab Mode
       if (!currentTab) return;
       
       pdfSaveBtn.disabled = true;
       pdfSaveSpinner.style.display = 'inline-block';
       
-      const sanitizeTitle = (currentTab.title || 'webpage')
-        .replace(/[\\/:*?"<>|]/g, '_')
-        .substring(0, 30);
-        
-      const today = new Date();
-      const yyyy = today.getFullYear();
-      const mm = String(today.getMonth() + 1).padStart(2, '0');
-      const dd = String(today.getDate()).padStart(2, '0');
-      const dateStr = `${yyyy}-${mm}-${dd}`;
-      
-      const filename = `${sanitizeTitle}_${dateStr}.pdf`;
-
-      let pdfSaved = false;
-
-      // 1. Try chrome.debugger Page.printToPDF
       try {
-        await chrome.debugger.attach({ tabId: currentTab.id }, '1.3');
-        const result = await chrome.debugger.sendCommand(
-          { tabId: currentTab.id },
-          'Page.printToPDF',
-          {
-            printBackground: true,
-            paperWidth: 8.27,
-            paperHeight: 11.69,
-            marginTop: 0.4,
-            marginBottom: 0.4,
-            marginLeft: 0.4,
-            marginRight: 0.4
+        let isPcBlog = false;
+        try {
+          const parsed = new URL(currentTab.url);
+          if (parsed.hostname === 'blog.naver.com') {
+            isPcBlog = true;
           }
-        );
-        await chrome.debugger.detach({ tabId: currentTab.id });
-
-        if (result && result.data) {
-          const dataUrl = `data:application/pdf;base64,${result.data}`;
-          await chrome.downloads.download({
-            url: dataUrl,
-            filename: filename,
-            saveAs: false
-          });
-          showToast('📄 PDF 파일 다운로드 시작!');
-          pdfSaved = true;
-        }
-      } catch (debuggerErr) {
-        console.warn('chrome.debugger printToPDF failed, trying window.print() fallback:', debuggerErr);
-        try {
-          await chrome.debugger.detach({ tabId: currentTab.id });
         } catch (e) {}
-      }
 
-      // 2. Fallback to window.print() if debugger failed
-      if (!pdfSaved) {
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId: currentTab.id },
-            func: () => {
-              window.print();
-            }
-          });
-          showToast('🖨️ 인쇄/PDF 저장 창이 열렸습니다.');
-        } catch (err) {
-          console.error('PDF save failed:', err);
-          showToast('PDF 저장 중 오류가 발생했습니다.', true);
+        if (isPcBlog) {
+          showToast('📱 모바일 변환 및 PDF 생성 중...');
+        } else {
+          showToast('⏳ PDF 파일 생성 중...');
         }
-      }
 
-      pdfSaveBtn.disabled = false;
-      pdfSaveSpinner.style.display = 'none';
+        const resp = await chrome.runtime.sendMessage({
+          type: 'SAVE_TAB_AS_PDF',
+          tabId: currentTab.id
+        });
+
+        if (resp && resp.success) {
+          if (resp.fallback) {
+            showToast('🖨️ 인쇄/PDF 저장 창이 열렸습니다.');
+          } else if (resp.isConverted) {
+            showToast('📄 모바일 최적화 PDF 다운로드 시작!');
+          } else {
+            showToast('📄 PDF 파일 다운로드 시작!');
+          }
+        } else {
+          showToast(resp?.message || 'PDF 저장 중 오류가 발생했습니다.', true);
+        }
+      } catch (err) {
+        console.error('PDF save failed:', err);
+        showToast('PDF 저장 중 오류가 발생했습니다.', true);
+      } finally {
+        pdfSaveBtn.disabled = false;
+        pdfSaveSpinner.style.display = 'none';
+      }
     });
   }
 

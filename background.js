@@ -26,61 +26,71 @@ function getMobileBlogUrl(url) {
 }
 
 // Injects a premium notification toast inside the webpage
-function showWebToast(tabId, message, isError = false) {
-  chrome.scripting.executeScript({
-    target: { tabId: tabId },
-    args: [message, isError],
-    func: (msg, error) => {
-      // Check if toast element already exists
-      let toast = document.getElementById('nblm-toast-notification');
-      if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'nblm-toast-notification';
-        
-        // CSS Style for modern glassmorphism toast
-        const style = document.createElement('style');
-        style.textContent = `
-          #nblm-toast-notification {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            padding: 12px 20px;
-            background: rgba(11, 15, 25, 0.9);
-            color: #f3f4f6;
-            border: 1px solid ${error ? '#ef4444' : '#03c75a'};
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 15px ${error ? 'rgba(239, 68, 68, 0.2)' : 'rgba(3, 199, 90, 0.2)'};
-            border-radius: 10px;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            font-size: 13px;
-            font-weight: 600;
-            z-index: 10000000;
-            opacity: 0;
-            transform: translateY(20px);
-            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-            pointer-events: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          }
-          #nblm-toast-notification.show {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        `;
-        document.head.appendChild(style);
-        document.body.appendChild(toast);
-      }
-      
-      toast.textContent = msg;
-      // Force layout reflow
-      toast.offsetHeight;
-      toast.className = 'show';
-      
-      setTimeout(() => {
-        toast.className = '';
-      }, 3000);
+async function showWebToast(tabId, message, isError = false) {
+  if (!tabId) return;
+  try {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || !tab.url) return;
+    const u = tab.url.toLowerCase();
+    if (u.startsWith('chrome://') || u.startsWith('chrome-extension://') || u.startsWith('edge://') || u.startsWith('about:') || u.startsWith('view-source:')) {
+      return;
     }
-  });
+
+    await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      args: [message, isError],
+      func: (msg, error) => {
+        // Check if toast element already exists
+        let toast = document.getElementById('nblm-toast-notification');
+        if (!toast) {
+          toast = document.createElement('div');
+          toast.id = 'nblm-toast-notification';
+          
+          // CSS Style for modern glassmorphism toast
+          const style = document.createElement('style');
+          style.textContent = `
+            #nblm-toast-notification {
+              position: fixed;
+              bottom: 30px;
+              right: 30px;
+              padding: 12px 20px;
+              background: rgba(11, 15, 25, 0.9);
+              color: #f3f4f6;
+              border: 1px solid ${error ? '#ef4444' : '#03c75a'};
+              box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 15px ${error ? 'rgba(239, 68, 68, 0.2)' : 'rgba(3, 199, 90, 0.2)'};
+              border-radius: 10px;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+              font-size: 13px;
+              font-weight: 600;
+              z-index: 10000000;
+              opacity: 0;
+              transform: translateY(20px);
+              transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+              pointer-events: none;
+              display: flex;
+              align-items: center;
+              gap: 8px;
+            }
+            #nblm-toast-notification.show {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          `;
+          document.head.appendChild(style);
+          document.body.appendChild(toast);
+        }
+        
+        toast.textContent = msg;
+        // Force layout reflow
+        toast.offsetHeight;
+        toast.className = 'show';
+        
+        setTimeout(() => {
+          toast.className = '';
+        }, 3000);
+      }
+    }).catch(() => {});
+  } catch (e) {}
 }
 
 // SingleFile Inliner Engine injected into web pages
@@ -353,6 +363,200 @@ const singleFileInlinerFunction = async (tabIndexInfo = null, isBatch = false) =
   }
 };
 
+// Function to save a tab as PDF (with auto-conversion of Naver Blog PC -> Mobile in background)
+async function saveTabAsPdf(tab) {
+  if (!tab || !tab.id) return { success: false, message: '유효한 탭이 아닙니다.' };
+  if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
+    return { success: false, message: '시스템 페이지는 지원하지 않습니다.' };
+  }
+
+  let targetTabId = tab.id;
+  let tempTabId = null;
+  let isConverted = false;
+
+  try {
+    const parsed = new URL(tab.url);
+    if (parsed.hostname === 'blog.naver.com') {
+      const mobileUrl = getMobileBlogUrl(tab.url);
+      showWebToast(tab.id, '📱 모바일 버전으로 자동 변환 중...');
+
+      // Create hidden background tab
+      const tempTab = await chrome.tabs.create({
+        url: mobileUrl,
+        active: false
+      });
+      tempTabId = tempTab.id;
+      targetTabId = tempTab.id;
+      isConverted = true;
+
+      // Wait for the temp tab to complete loading
+      await new Promise((resolve) => {
+        let isResolved = false;
+        const checkTab = (tId, changeInfo) => {
+          if (tId === tempTabId && changeInfo.status === 'complete') {
+            if (!isResolved) {
+              isResolved = true;
+              chrome.tabs.onUpdated.removeListener(checkTab);
+              resolve();
+            }
+          }
+        };
+        chrome.tabs.onUpdated.addListener(checkTab);
+        setTimeout(() => {
+          if (!isResolved) {
+            isResolved = true;
+            chrome.tabs.onUpdated.removeListener(checkTab);
+            resolve();
+          }
+        }, 12000);
+      });
+
+      // Settle delay for initial rendering
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+  } catch (e) {
+    console.warn('URL parsing or mobile tab creation failed:', e);
+  }
+
+  // If Naver mobile blog (either converted or original mobile tab), ensure images are eager-loaded and high-res
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: targetTabId },
+      func: async () => {
+        try {
+          const imgs = Array.from(document.querySelectorAll('img'));
+          const waitPromises = [];
+
+          imgs.forEach(img => {
+            img.loading = 'eager';
+            
+            // 1. Extract candidate URL from lazy attributes or current src
+            let realSrc = img.getAttribute('data-lazy-src') || 
+                          img.getAttribute('data-src') || 
+                          img.getAttribute('data-original') || 
+                          img.getAttribute('lazy-src') || 
+                          img.src;
+
+            // 2. Naver Blog Blur Replacement: replace w80_blur or _blur with HD w966
+            if (realSrc) {
+              if (realSrc.includes('w80_blur')) {
+                realSrc = realSrc.replace('w80_blur', 'w966');
+              } else if (realSrc.includes('_blur')) {
+                realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
+              }
+              // Also upgrade small w400 thumbnails to w966 if on Naver image server
+              if (realSrc.includes('type=w400')) {
+                realSrc = realSrc.replace('type=w400', 'type=w966');
+              }
+            }
+
+            // 3. Update img.src and wait for it to complete loading
+            if (realSrc && img.src !== realSrc) {
+              img.src = realSrc;
+              if (!img.complete) {
+                waitPromises.push(new Promise(res => {
+                  img.onload = img.onerror = res;
+                  setTimeout(res, 3500); // 3.5s timeout per image safety
+                }));
+              }
+            }
+          });
+
+          // Hide unwanted floating bars & footer widgets
+          const floaters = document.querySelectorAll('.u_ft, .floating_area, .top_banner, .btn_top, .pop_notice');
+          floaters.forEach(el => el.style.display = 'none');
+
+          // Wait for all HD images to finish loading in parallel
+          if (waitPromises.length > 0) {
+            await Promise.all(waitPromises);
+          }
+        } catch (e) {
+          console.error('HD image preparation failed:', e);
+        }
+      }
+    });
+    // Brief settle buffer for layout reflow
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  } catch (e) {
+    console.warn('Image preloading execution failed:', e);
+  }
+
+  showWebToast(tab.id, '⏳ PDF 파일 생성 중...');
+  let pdfSaved = false;
+
+  try {
+    await chrome.debugger.attach({ tabId: targetTabId }, '1.3');
+    const result = await chrome.debugger.sendCommand(
+      { tabId: targetTabId },
+      'Page.printToPDF',
+      {
+        printBackground: true,
+        paperWidth: 8.27,
+        paperHeight: 11.69,
+        marginTop: 0.4,
+        marginBottom: 0.4,
+        marginLeft: 0.4,
+        marginRight: 0.4
+      }
+    );
+    await chrome.debugger.detach({ tabId: targetTabId });
+
+    if (result && result.data) {
+      const dataUrl = `data:application/pdf;base64,${result.data}`;
+      
+      let title = tab.title || 'webpage';
+      if (tempTabId) {
+        try {
+          const freshTempTab = await chrome.tabs.get(tempTabId);
+          if (freshTempTab && freshTempTab.title) {
+            title = freshTempTab.title;
+          }
+        } catch (e) {}
+      }
+      
+      const sanitizeTitle = title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 30);
+      const today = new Date();
+      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const filename = `${sanitizeTitle}_${dateStr}.pdf`;
+
+      await chrome.downloads.download({
+        url: dataUrl,
+        filename: filename,
+        saveAs: false
+      });
+
+      showWebToast(tab.id, isConverted ? '📄 모바일 최적화 PDF 다운로드 시작!' : '📄 PDF 파일 다운로드 시작!');
+      pdfSaved = true;
+    }
+  } catch (err) {
+    console.warn('saveTabAsPdf debugger failed:', err);
+    try { await chrome.debugger.detach({ tabId: targetTabId }); } catch (e) {}
+  } finally {
+    if (tempTabId) {
+      try {
+        await chrome.tabs.remove(tempTabId);
+      } catch (e) {}
+    }
+  }
+
+  // Fallback to window.print() on original tab if debugger failed
+  if (!pdfSaved) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => { window.print(); }
+      });
+      showWebToast(tab.id, '🖨️ 인쇄/PDF 저장 창이 열렸습니다.');
+      return { success: true, fallback: true, message: '인쇄/PDF 저장 창이 열렸습니다.' };
+    } catch (err) {
+      showWebToast(tab.id, '❌ PDF 생성 실패', true);
+      return { success: false, message: 'PDF 생성에 실패했습니다.' };
+    }
+  }
+
+  return { success: true, isConverted, message: 'PDF 다운로드가 시작되었습니다.' };
+}
+
 // Global Hotkeys Command Listener
 chrome.commands.onCommand.addListener(async (command) => {
   try {
@@ -525,58 +729,7 @@ ${cleanedText}
     } 
     
     else if (command === 'save-pdf') {
-      showWebToast(tab.id, '⏳ PDF 파일 생성 중...');
-      let pdfSaved = false;
-      try {
-        await chrome.debugger.attach({ tabId: tab.id }, '1.3');
-        const result = await chrome.debugger.sendCommand(
-          { tabId: tab.id },
-          'Page.printToPDF',
-          {
-            printBackground: true,
-            paperWidth: 8.27,
-            paperHeight: 11.69,
-            marginTop: 0.4,
-            marginBottom: 0.4,
-            marginLeft: 0.4,
-            marginRight: 0.4
-          }
-        );
-        await chrome.debugger.detach({ tabId: tab.id });
-
-        if (result && result.data) {
-          const dataUrl = `data:application/pdf;base64,${result.data}`;
-          const sanitizeTitle = (tab.title || 'webpage')
-            .replace(/[\\/:*?"<>|]/g, '_')
-            .substring(0, 30);
-          const today = new Date();
-          const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-          const filename = `${sanitizeTitle}_${dateStr}.pdf`;
-
-          await chrome.downloads.download({
-            url: dataUrl,
-            filename: filename,
-            saveAs: false
-          });
-          showWebToast(tab.id, '📄 PDF 파일 다운로드 시작!');
-          pdfSaved = true;
-        }
-      } catch (err) {
-        console.warn('Background save-pdf debugger failed:', err);
-        try { await chrome.debugger.detach({ tabId: tab.id }); } catch (e) {}
-      }
-
-      if (!pdfSaved) {
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            func: () => { window.print(); }
-          });
-          showWebToast(tab.id, '🖨️ 인쇄/PDF 저장 창이 열렸습니다.');
-        } catch (err) {
-          showWebToast(tab.id, '❌ PDF 생성 실패', true);
-        }
-      }
+      await saveTabAsPdf(tab);
     }
 
     else if (command === 'capture-page') {
@@ -1135,6 +1288,91 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === 'GET_AUTO_COMMENT_STATE') {
     sendResponse({ state: autoCommentState });
+    return true;
+  }
+
+  // Save Tab as PDF (with background mobile auto-conversion for Naver Blog)
+  if (message.type === 'SAVE_TAB_AS_PDF') {
+    (async () => {
+      try {
+        const tab = await chrome.tabs.get(message.tabId);
+        const result = await saveTabAsPdf(tab);
+        sendResponse(result);
+      } catch (err) {
+        console.error('SAVE_TAB_AS_PDF message error:', err);
+        sendResponse({ success: false, message: err.message || 'PDF 저장 실패' });
+      }
+    })();
+    return true;
+  }
+
+  // Batch Save PDF across multiple tabs (sequential processing with progress notifications)
+  if (message.type === 'BATCH_SAVE_PDF_TABS') {
+    (async () => {
+      const tabIds = message.tabIds || [];
+      let successCount = 0;
+
+      for (let i = 0; i < tabIds.length; i++) {
+        const tabId = tabIds[i];
+        let tab = null;
+        try {
+          tab = await chrome.tabs.get(tabId);
+        } catch (e) {}
+
+        if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
+          continue;
+        }
+
+        // Broadcast start of current tab
+        chrome.runtime.sendMessage({
+          type: 'BATCH_SAVE_PDF_PROGRESS',
+          current: i + 1,
+          total: tabIds.length,
+          title: tab.title || '페이지',
+          status: 'processing'
+        }).catch(() => {});
+
+        try {
+          const res = await saveTabAsPdf(tab);
+          if (res && res.success) {
+            successCount++;
+          }
+        } catch (err) {
+          console.error(`Batch PDF tab ${tabId} failed:`, err);
+        }
+
+        // Broadcast finished for this tab
+        chrome.runtime.sendMessage({
+          type: 'BATCH_SAVE_PDF_PROGRESS',
+          current: i + 1,
+          total: tabIds.length,
+          title: tab.title || '페이지',
+          status: 'downloaded'
+        }).catch(() => {});
+
+        // Delay between tabs to let debugger detach cleanly
+        if (i < tabIds.length - 1) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      // Broadcast all tabs complete
+      chrome.runtime.sendMessage({
+        type: 'BATCH_SAVE_PDF_COMPLETE',
+        total: tabIds.length,
+        saved: successCount
+      }).catch(() => {});
+
+      // Notify active tab with toast
+      try {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab && activeTab.id) {
+          showWebToast(activeTab.id, `🎉 총 ${successCount}개 탭 PDF 일괄 저장 완료!`);
+        }
+      } catch (e) {}
+
+      sendResponse({ success: true, total: tabIds.length, saved: successCount });
+    })();
     return true;
   }
 
