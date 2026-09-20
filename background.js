@@ -887,6 +887,8 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
 
       const tab = validCafeTabs[i];
       const commentText = commentsList[i];
+      let wasSkipped = false;
+      let skippedAuthor = '';
 
       await broadcastAutoCommentState({
         currentStep: i + 1,
@@ -916,6 +918,23 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
 
             const textarea = await waitForElement(findTextarea, 3000);
             if (!textarea) return null;
+
+            // 작성자 닉네임 확인 (특정 닉네임 스킵)
+            const findNickname = () => {
+              const el = document.querySelector('.nick_box .nickname') ||
+                         document.querySelector('.nick_box button') ||
+                         document.querySelector('[data-nlog-area="content_header.writer_profile"]') ||
+                         document.querySelector('.nick_box') ||
+                         document.querySelector('button.nickname') ||
+                         document.querySelector('.nickname');
+              return el ? (el.textContent || '').trim() : '';
+            };
+
+            const writerNick = findNickname();
+            const skipNicknames = ['김땡땡96', '다람쥐예신'];
+            if (writerNick && skipNicknames.some(name => writerNick.includes(name))) {
+              return { success: false, skipped: true, reason: 'author_match', author: writerNick };
+            }
 
             // 중복 실행 방지 가드
             const now = Date.now();
@@ -977,8 +996,14 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
         });
 
         let injected = false;
+
         if (injectionResults && injectionResults.length > 0) {
           for (const res of injectionResults) {
+            if (res.result && res.result.skipped && res.result.reason === 'author_match') {
+              wasSkipped = true;
+              skippedAuthor = res.result.author || '';
+              break;
+            }
             if (res.result && res.result.success) {
               injected = true;
               break;
@@ -986,7 +1011,14 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
           }
         }
 
-        if (injected) {
+        if (wasSkipped) {
+          console.log(`[AutoComment] Tab ${tab.id} skipped (Author: ${skippedAuthor})`);
+          await broadcastAutoCommentState({
+            currentStep: i + 1,
+            statusText: `${i + 1}/${totalToProcess}번째 탭 스킵됨 (작성자: ${skippedAuthor})`,
+            statusColor: 'var(--accent-orange, #e67e22)'
+          });
+        } else if (injected) {
           successCount++;
         }
       } catch (injectErr) {
@@ -1012,14 +1044,16 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
 
       // Keep-Alive chunked sleep with live countdown (supports 50s, 60s, or any long delays)
       if (i < totalToProcess - 1) {
-        const totalDelaySec = Math.max(1, Math.round(delaySec || 5));
+        const totalDelaySec = wasSkipped ? 1 : Math.max(1, Math.round(delaySec || 5));
         
         for (let s = totalDelaySec; s > 0; s--) {
           if (autoCommentAbortRequested) break;
 
           await broadcastAutoCommentState({
             currentStep: i + 1,
-            statusText: `${i + 1}/${totalToProcess}번째 완료 (다음 탭까지 ${s}초 대기 중...)`,
+            statusText: wasSkipped
+              ? `${i + 1}/${totalToProcess}번째 스킵됨 (다음 탭 이동 중...)`
+              : `${i + 1}/${totalToProcess}번째 완료 (다음 탭까지 ${s}초 대기 중...)`,
             statusColor: 'var(--text-sub)'
           });
           
