@@ -1415,7 +1415,7 @@ ${res.content}`;
 
         let finalText = text;
         if (cafeIncludePrompt && cafeIncludePrompt.checked) {
-          const promptHeader = `내가 준 ${count}개의 글에 대해 댓글 작성해줘.\n\n`;
+          const promptHeader = `[중요] 이전 대화나 이전에 전달된 글 내용은 모두 잊어줘. 지금 새로 입력하는 아래 ${count}개의 글에 대해서만 댓글을 작성해줘.\n\n`;
           finalText = promptHeader + text;
         }
 
