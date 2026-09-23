@@ -11,14 +11,77 @@ function isNaverBlogUrl(url) {
   }
 }
 
+// Resolves real blog post URL from PC Naver blog iframe#mainFrame if present
+async function resolveRealBlogUrl(tabId, originalUrl) {
+  if (!originalUrl) return originalUrl;
+  try {
+    const parsed = new URL(originalUrl);
+    if (parsed.hostname !== 'blog.naver.com') return originalUrl;
+
+    const [frameCheck] = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: () => {
+        try {
+          const frame = document.getElementById('mainFrame') || document.querySelector('iframe[name="mainFrame"]');
+          if (frame) {
+            try {
+              if (frame.contentWindow && frame.contentWindow.location && frame.contentWindow.location.href) {
+                const h = frame.contentWindow.location.href;
+                if (h && h !== 'about:blank') return h;
+              }
+            } catch (e) {}
+            const src = frame.getAttribute('src');
+            if (src) return new URL(src, window.location.href).href;
+          }
+        } catch (e) {}
+        return null;
+      }
+    });
+
+    if (frameCheck && frameCheck.result) {
+      return frameCheck.result;
+    }
+  } catch (e) {
+    console.warn('resolveRealBlogUrl error:', e);
+  }
+  return originalUrl;
+}
+
 // Convert PC Blog URL to Mobile Blog URL
 function getMobileBlogUrl(url) {
   if (!url) return url;
   try {
     const parsed = new URL(url);
-    if (parsed.hostname === 'blog.naver.com') {
-      parsed.hostname = 'm.blog.naver.com';
+    if (parsed.hostname === 'm.blog.naver.com') return url;
+    if (parsed.hostname !== 'blog.naver.com') return url;
+
+    // 1. Parameter format: ?blogId=xxx&logNo=yyy
+    if (parsed.searchParams.has('blogId') && parsed.searchParams.has('logNo')) {
+      const blogId = parsed.searchParams.get('blogId');
+      const logNo = parsed.searchParams.get('logNo');
+      return `https://m.blog.naver.com/${blogId}/${logNo}`;
     }
+
+    const pathSegments = parsed.pathname.split('/').filter(Boolean);
+
+    // 2. Path blogId with searchParams logNo: /xxx?Redirect=Log&logNo=yyy
+    if (pathSegments.length >= 1 && pathSegments[0] !== 'PostView.naver' && pathSegments[0] !== 'PostList.naver' && parsed.searchParams.has('logNo')) {
+      const blogId = pathSegments[0];
+      const logNo = parsed.searchParams.get('logNo');
+      return `https://m.blog.naver.com/${blogId}/${logNo}`;
+    }
+
+    // 3. Path format: /xxx/yyy (where yyy is numeric post ID)
+    if (pathSegments.length >= 2 && /^\d+$/.test(pathSegments[1])) {
+      return `https://m.blog.naver.com/${pathSegments[0]}/${pathSegments[1]}`;
+    }
+
+    // 4. Blog Home: /xxx
+    if (pathSegments.length === 1 && pathSegments[0] !== 'PostView.naver' && pathSegments[0] !== 'PostList.naver') {
+      return `https://m.blog.naver.com/${pathSegments[0]}`;
+    }
+
+    parsed.hostname = 'm.blog.naver.com';
     return parsed.toString();
   } catch (e) {
     return url;
@@ -383,42 +446,46 @@ async function saveTabAsPdf(tab) {
   try {
     const parsed = new URL(tab.url);
     if (parsed.hostname === 'blog.naver.com') {
-      const mobileUrl = getMobileBlogUrl(tab.url);
-      showWebToast(tab.id, '📱 모바일 버전으로 자동 변환 중...');
+      const actualUrl = await resolveRealBlogUrl(tab.id, tab.url);
+      const mobileUrl = getMobileBlogUrl(actualUrl);
 
-      // Create hidden background tab
-      const tempTab = await chrome.tabs.create({
-        url: mobileUrl,
-        active: false
-      });
-      tempTabId = tempTab.id;
-      targetTabId = tempTab.id;
-      isConverted = true;
+      if (mobileUrl && mobileUrl !== tab.url) {
+        showWebToast(tab.id, '📱 모바일 버전으로 자동 변환 중...');
 
-      // Wait for the temp tab to complete loading
-      await new Promise((resolve) => {
-        let isResolved = false;
-        const checkTab = (tId, changeInfo) => {
-          if (tId === tempTabId && changeInfo.status === 'complete') {
+        // Create hidden background tab
+        const tempTab = await chrome.tabs.create({
+          url: mobileUrl,
+          active: false
+        });
+        tempTabId = tempTab.id;
+        targetTabId = tempTab.id;
+        isConverted = true;
+
+        // Wait for the temp tab to complete loading
+        await new Promise((resolve) => {
+          let isResolved = false;
+          const checkTab = (tId, changeInfo) => {
+            if (tId === tempTabId && changeInfo.status === 'complete') {
+              if (!isResolved) {
+                isResolved = true;
+                chrome.tabs.onUpdated.removeListener(checkTab);
+                resolve();
+              }
+            }
+          };
+          chrome.tabs.onUpdated.addListener(checkTab);
+          setTimeout(() => {
             if (!isResolved) {
               isResolved = true;
               chrome.tabs.onUpdated.removeListener(checkTab);
               resolve();
             }
-          }
-        };
-        chrome.tabs.onUpdated.addListener(checkTab);
-        setTimeout(() => {
-          if (!isResolved) {
-            isResolved = true;
-            chrome.tabs.onUpdated.removeListener(checkTab);
-            resolve();
-          }
-        }, 12000);
-      });
+          }, 12000);
+        });
 
-      // Settle delay for initial rendering
-      await new Promise((resolve) => setTimeout(resolve, 800));
+        // Settle delay for initial rendering
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
     }
   } catch (e) {
     console.warn('URL parsing or mobile tab creation failed:', e);
@@ -438,14 +505,15 @@ async function saveTabAsPdf(tab) {
             printStyle.id = 'nblm-pdf-print-fix';
             printStyle.textContent = `
               @media print {
-                /* Hide toasts, floating buttons, top buttons, fixed navs */
+                /* Hide toasts, floating buttons, top buttons, fixed navs, skeletons */
                 #nblm-toast-notification,
                 #__singlefile_toast,
                 .btn_top, button[class*="top" i], [class*="scrollTop" i], [class*="scroll_top" i],
                 .floating_area, [class*="floating" i], [class*="Float" i],
                 .u_ft, .pop_notice, .top_banner, [class*="toast" i],
                 [class*="BottomBar" i], [class*="bottom_bar" i],
-                [class*="snackBar" i], [class*="snackbar" i] {
+                [class*="snackBar" i], [class*="snackbar" i],
+                [class*="skeleton" i], [class*="Skeleton" i], [class*="shimmer" i] {
                   display: none !important;
                   visibility: hidden !important;
                 }
@@ -469,27 +537,48 @@ async function saveTabAsPdf(tab) {
             document.head.appendChild(printStyle);
           }
 
-          // 2. Auto-scroll down the entire page to trigger IntersectionObserver & scroll-based lazy loading
-          const originalScrollY = window.scrollY;
-          const initialScrollHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 1000);
-          const scrollStep = Math.max(window.innerHeight, 500);
-
-          for (let pos = 0; pos < initialScrollHeight; pos += scrollStep) {
-            window.scrollTo(0, pos);
-            await new Promise(r => setTimeout(r, 60));
+          // 2. Wait for dynamic SPA content (React / Vue) to finish initial rendering & remove skeletons
+          const startTime = Date.now();
+          const maxWaitMs = 6000;
+          while (Date.now() - startTime < maxWaitMs) {
+            const hasPostContainer = document.querySelector('.se-main-container, #viewTypeSelector, [class*="post_article"], [class*="se_doc_viewer"]');
+            const hasSkeleton = document.querySelector('[class*="skeleton" i], [class*="Skeleton" i], [class*="shimmer" i]');
+            if (hasPostContainer && !hasSkeleton) {
+              break;
+            }
+            const hasListItem = document.querySelector('[class*="postlist" i], [class*="post_item" i], [class*="item_box" i]');
+            if (hasListItem && !hasSkeleton) {
+              break;
+            }
+            await new Promise(r => setTimeout(r, 200));
           }
 
-          // Check if height increased dynamically during scroll (e.g. infinite scroll / dynamic components)
-          const updatedScrollHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-          if (updatedScrollHeight > initialScrollHeight) {
-            window.scrollTo(0, updatedScrollHeight);
-            await new Promise(r => setTimeout(r, 150));
+          // Brief delay to ensure DOM settle
+          await new Promise(r => setTimeout(r, 300));
+
+          // 3. Auto-scroll down the entire page to trigger IntersectionObserver & scroll-based lazy loading
+          const originalScrollY = window.scrollY;
+          const postContainer = document.querySelector('.se-main-container, #viewTypeSelector, [class*="post_article"], [class*="se_doc_viewer"]');
+          
+          let maxScrollTarget = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 1000);
+          if (postContainer) {
+            const rect = postContainer.getBoundingClientRect();
+            maxScrollTarget = Math.min(window.scrollY + rect.bottom + 400, maxScrollTarget);
+          } else {
+            // Cap at 3500px for feed/list pages to prevent infinite scroll runaway
+            maxScrollTarget = Math.min(maxScrollTarget, 3500);
+          }
+
+          const scrollStep = Math.max(window.innerHeight, 500);
+          for (let pos = 0; pos < maxScrollTarget; pos += scrollStep) {
+            window.scrollTo(0, pos);
+            await new Promise(r => setTimeout(r, 70));
           }
 
           // Restore scroll position
           window.scrollTo(0, originalScrollY);
 
-          // 3. Eager-load and swap real URLs for all lazy images
+          // 4. Eager-load and swap real URLs for all lazy images
           const imgs = Array.from(document.querySelectorAll('img'));
           const waitPromises = [];
 
@@ -524,8 +613,16 @@ async function saveTabAsPdf(tab) {
             if (img.src && !img.complete) {
               waitPromises.push(new Promise(res => {
                 img.onload = img.onerror = res;
-                setTimeout(res, 3500); // 3.5s timeout safety per image
+                setTimeout(res, 4000); // 4s timeout safety per image
               }));
+            }
+          });
+
+          // Also check for background images
+          document.querySelectorAll('[data-lazy-bg], [data-bg], [data-background]').forEach(el => {
+            const bgUrl = el.getAttribute('data-lazy-bg') || el.getAttribute('data-bg') || el.getAttribute('data-background');
+            if (bgUrl) {
+              el.style.backgroundImage = `url("${bgUrl}")`;
             }
           });
 
@@ -707,7 +804,8 @@ ${cleanedText}
         showWebToast(tab.id, '📋 복사 완료! 노트북LM에 붙여넣으세요.');
       } else {
         // 2. PC Blog: Fetch Mobile URL in background, and pass to Active Tab for parsing
-        const mobileUrl = getMobileBlogUrl(tab.url);
+        const actualUrl = await resolveRealBlogUrl(tab.id, tab.url);
+        const mobileUrl = getMobileBlogUrl(actualUrl);
         const response = await fetch(mobileUrl);
         if (!response.ok) {
           showWebToast(tab.id, '❌ 네이버 서버 통신 실패', true);

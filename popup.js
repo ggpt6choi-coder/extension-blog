@@ -115,6 +115,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // Resolves real blog post URL from PC Naver blog iframe#mainFrame if present
+  async function resolveRealBlogUrl(tabId, originalUrl) {
+    if (!originalUrl) return originalUrl;
+    try {
+      const parsed = new URL(originalUrl);
+      if (parsed.hostname !== 'blog.naver.com') return originalUrl;
+
+      const [frameCheck] = await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: () => {
+          try {
+            const frame = document.getElementById('mainFrame') || document.querySelector('iframe[name="mainFrame"]');
+            if (frame) {
+              try {
+                if (frame.contentWindow && frame.contentWindow.location && frame.contentWindow.location.href) {
+                  const h = frame.contentWindow.location.href;
+                  if (h && h !== 'about:blank') return h;
+                }
+              } catch (e) {}
+              const src = frame.getAttribute('src');
+              if (src) return new URL(src, window.location.href).href;
+            }
+          } catch (e) {}
+          return null;
+        }
+      });
+
+      if (frameCheck && frameCheck.result) {
+        return frameCheck.result;
+      }
+    } catch (e) {
+      console.warn('resolveRealBlogUrl error:', e);
+    }
+    return originalUrl;
+  }
+
   // Convert PC Blog URL to Mobile Blog URL
   function getMobileBlogUrl(url) {
     if (!url) return url;
@@ -123,6 +159,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (parsed.hostname === 'm.blog.naver.com') return url;
       if (parsed.hostname !== 'blog.naver.com') return url;
 
+      // 1. Parameter format: ?blogId=xxx&logNo=yyy
       if (parsed.searchParams.has('blogId') && parsed.searchParams.has('logNo')) {
         const blogId = parsed.searchParams.get('blogId');
         const logNo = parsed.searchParams.get('logNo');
@@ -130,8 +167,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       const pathSegments = parsed.pathname.split('/').filter(Boolean);
-      if (pathSegments.length >= 2) {
+
+      // 2. Path blogId with searchParams logNo: /xxx?Redirect=Log&logNo=yyy
+      if (pathSegments.length >= 1 && pathSegments[0] !== 'PostView.naver' && pathSegments[0] !== 'PostList.naver' && parsed.searchParams.has('logNo')) {
+        const blogId = pathSegments[0];
+        const logNo = parsed.searchParams.get('logNo');
+        return `https://m.blog.naver.com/${blogId}/${logNo}`;
+      }
+
+      // 3. Path format: /xxx/yyy (where yyy is numeric post ID)
+      if (pathSegments.length >= 2 && /^\d+$/.test(pathSegments[1])) {
         return `https://m.blog.naver.com/${pathSegments[0]}/${pathSegments[1]}`;
+      }
+
+      // 4. Blog Home: /xxx
+      if (pathSegments.length === 1 && pathSegments[0] !== 'PostView.naver' && pathSegments[0] !== 'PostList.naver') {
+        return `https://m.blog.naver.com/${pathSegments[0]}`;
       }
 
       parsed.hostname = 'm.blog.naver.com';
@@ -476,7 +527,8 @@ ${cleanedText}
         }
       } else {
         // PC blog: fetch mobile version in background
-        const mobileUrl = getMobileBlogUrl(currentTab.url);
+        const actualUrl = await resolveRealBlogUrl(currentTab.id, currentTab.url);
+        const mobileUrl = getMobileBlogUrl(actualUrl);
         const response = await fetch(mobileUrl);
         if (!response.ok) {
           throw new Error('네트워크 응답이 올바르지 않습니다.');
@@ -641,7 +693,8 @@ ${cleanedText}
             }
           } else {
             // PC: fetch mobile
-            const mobileUrl = getMobileBlogUrl(tab.url);
+            const actualUrl = await resolveRealBlogUrl(tab.id, tab.url);
+            const mobileUrl = getMobileBlogUrl(actualUrl);
             const response = await fetch(mobileUrl);
             if (response.ok) {
               const html = await response.text();
