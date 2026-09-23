@@ -505,9 +505,10 @@ async function saveTabAsPdf(tab) {
             printStyle.id = 'nblm-pdf-print-fix';
             printStyle.textContent = `
               @media print {
-                /* Hide toasts, floating buttons, top buttons, fixed navs, skeletons */
+                /* Hide toasts, floating buttons, sticky top headers, fixed navs, skeletons */
                 #nblm-toast-notification,
                 #__singlefile_toast,
+                .Ngnb, [class*="Ngnb" i], header, nav[class*="gnb" i],
                 .btn_top, button[class*="top" i], [class*="scrollTop" i], [class*="scroll_top" i],
                 .floating_area, [class*="floating" i], [class*="Float" i],
                 .u_ft, .pop_notice, .top_banner, [class*="toast" i],
@@ -527,10 +528,31 @@ async function saveTabAsPdf(tab) {
                   position: static !important;
                 }
 
+                /* Avoid splitting headings, quotes, tables, and link cards across page breaks */
+                h1, h2, h3, h4, h5, h6,
+                .se-section-title, [class*="section_title" i], [class*="sectionTitle" i],
+                .se-title-text, [class*="se-title" i],
+                blockquote, .se-quote, [class*="se-quote" i],
+                table, tr, td, th, [class*="table" i],
+                figure, .se-module-image, [class*="module_image" i],
+                [class*="component_image" i], .se-component-image,
+                .se-oglink, [class*="oglink" i], [class*="link_card" i] {
+                  break-inside: avoid !important;
+                  page-break-inside: avoid !important;
+                }
+
+                /* Keep headings attached to subsequent paragraphs */
+                h1, h2, h3, h4, h5, h6,
+                .se-section-title, [class*="section_title" i], [class*="sectionTitle" i],
+                .se-title-text, [class*="se-title" i] {
+                  break-after: avoid !important;
+                  page-break-after: avoid !important;
+                }
+
                 img, figure {
                   max-width: 100% !important;
-                  page-break-inside: avoid;
-                  break-inside: avoid;
+                  page-break-inside: avoid !important;
+                  break-inside: avoid !important;
                 }
               }
             `;
