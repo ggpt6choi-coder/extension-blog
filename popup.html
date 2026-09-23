@@ -29,7 +29,7 @@
     }
     
     body {
-      width: 360px;
+      width: 380px;
       font-family: var(--font-family);
       background-color: var(--bg-dark);
       color: var(--text-main);
@@ -99,12 +99,39 @@
     
     .card-title {
       font-size: 13px;
-      font-weight: 500;
+      font-weight: 600;
       color: var(--text-sub);
       margin-bottom: 12px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+    }
+    
+    /* Tab Switcher Styles */
+    .tabs-nav {
+      display: flex;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 4px;
+      margin-bottom: 16px;
+      gap: 4px;
+    }
+    
+    .tab-nav-btn {
+      flex: 1;
+      padding: 7px 8px;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: var(--text-sub);
+      font-family: var(--font-family);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: center;
+      white-space: nowrap;
     }
     
     .badge {
@@ -485,6 +512,7 @@
   <div class="tabs-nav">
     <button class="tab-nav-btn active" id="tab-btn-blog">블로그 & 일반</button>
     <button class="tab-nav-btn" id="tab-btn-cafe">네이버 카페</button>
+    <button class="tab-nav-btn" id="tab-btn-write">✍️ 블로그 글쓰기</button>
   </div>
 
   <!-- Blog & General Tab Content -->
@@ -704,6 +732,87 @@
           <span>지침서 복사</span>
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Naver Blog Auto-Write Tab Content -->
+  <div id="container-write" class="tab-content">
+    <!-- JSON Input & Options Card -->
+    <div class="card" id="write-input-card">
+      <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+        <span>블로그 원고 JSON</span>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-secondary" id="write-open-page-btn" title="네이버 블로그 글쓰기 새 탭 열기" style="padding: 4px 8px; font-size: 11px; height: 26px;">
+            ✏️ 새 글창
+          </button>
+          <input type="file" id="write-json-file" accept=".json" style="display: none;">
+          <button class="btn btn-secondary" id="write-file-load-btn" style="padding: 4px 8px; font-size: 11px; height: 26px;">
+            📁 파일 선택
+          </button>
+          <button class="btn btn-secondary" id="write-sample-btn" style="padding: 4px 8px; font-size: 11px; height: 26px;">
+            샘플 예시
+          </button>
+        </div>
+      </div>
+      
+      <textarea class="textarea-json" id="write-json-input" style="height: 125px; font-family: 'SFMono-Regular', Consolas, Menlo, monospace; font-size: 11px; line-height: 1.4;" placeholder='{
+  "title": "블로그 포스팅 제목",
+  "content": [
+    {
+      "subtitle": "1. 첫 번째 소제목 (인용구 스타일)",
+      "body": "본문 내용 텍스트입니다.\n(IMG_01.jpg)\n사진 안내문구가 자동으로 삽입됩니다."
+    }
+  ],
+  "related_topics": ["연관 주제 1", "연관 주제 2"],
+  "hashtags": ["#네이버블로그", "#자동작성"]
+}'></textarea>
+
+      <!-- Advanced Options -->
+      <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+        <div class="detail-row" style="margin-bottom: 2px;">
+          <span class="detail-label" style="font-size: 11px;">상단 작성자 표기 (비워두면 생략)</span>
+          <input type="text" id="write-author-input" class="input-text-custom" value="" placeholder="예: 글/사진 나의블로그" style="font-size: 11px; padding: 6px 10px;">
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <label class="setting-item" style="cursor: pointer; user-select: none;">
+            <input type="checkbox" id="write-auto-save" class="checkbox-custom" checked>
+            <span style="font-size: 11px;">작성 완료 후 임시저장 클릭</span>
+          </label>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 11px; color: var(--text-sub);">입력 속도:</span>
+            <select id="write-speed-select" class="input-number-custom" style="padding: 3px 6px; font-size: 11px; width: 78px; background: rgba(255,255,255,0.06); color: var(--text-main); border: 1px solid var(--card-border); border-radius: 6px;">
+              <option value="fast" selected>초고속</option>
+              <option value="human">사람처럼</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div id="write-btn-group" style="display: flex; gap: 8px; margin-top: 12px;">
+        <button class="btn btn-primary" id="write-start-btn" style="flex: 1; padding: 11px;">
+          <span class="spinner" id="write-spinner" style="display: none;"></span>
+          <svg id="write-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+          <span id="write-btn-text">블로그 자동 작성 시작</span>
+        </button>
+        <button class="btn" id="write-stop-btn" style="display: none; padding: 11px 16px; background: #e53935; border: 1px solid #d32f2f; color: #ffffff; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; align-items: center; justify-content: center; gap: 6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
+          <span id="write-stop-text">중단</span>
+        </button>
+      </div>
+
+      <!-- Real-time Progress Gauge -->
+      <div id="write-progress-container" style="display: none; margin-top: 12px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px;">
+          <span id="write-progress-text" style="color: var(--text-sub); font-weight: 600;">작성 준비 중...</span>
+          <span id="write-progress-percent" style="color: var(--accent-naver); font-weight: 700; font-family: monospace; font-size: 12px;">0%</span>
+        </div>
+        <div style="width: 100%; height: 7px; background: rgba(255, 255, 255, 0.08); border-radius: 999px; overflow: hidden; position: relative;">
+          <div id="write-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #03cf5d, #00b04f); border-radius: 999px; transition: width 0.3s ease;"></div>
+        </div>
+      </div>
+
+      <div class="progress-status" id="write-progress-status" style="display: none; margin-top: 8px; font-size: 12px; text-align: center; color: var(--accent-naver);">대기 중...</div>
     </div>
   </div>
 

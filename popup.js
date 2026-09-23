@@ -38,8 +38,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Tab Switcher Elements
   const tabBtnBlog = document.getElementById('tab-btn-blog');
   const tabBtnCafe = document.getElementById('tab-btn-cafe');
+  const tabBtnWrite = document.getElementById('tab-btn-write');
   const containerBlog = document.getElementById('container-blog');
   const containerCafe = document.getElementById('container-cafe');
+  const containerWrite = document.getElementById('container-write');
+
+  // Blog Auto-Write Elements
+  const writePageStatusBadge = document.getElementById('write-page-status-badge');
+  const writeCurrentTabTitle = document.getElementById('write-current-tab-title');
+  const writeOpenPageContainer = document.getElementById('write-open-page-container');
+  const writeOpenPageBtn = document.getElementById('write-open-page-btn');
+  const writeJsonFile = document.getElementById('write-json-file');
+  const writeFileLoadBtn = document.getElementById('write-file-load-btn');
+  const writeSampleBtn = document.getElementById('write-sample-btn');
+  const writeJsonInput = document.getElementById('write-json-input');
+  const writeAuthorInput = document.getElementById('write-author-input');
+  const writeAutoSave = document.getElementById('write-auto-save');
+  const writeSpeedSelect = document.getElementById('write-speed-select');
+  const writeStartBtn = document.getElementById('write-start-btn');
+  const writeSpinner = document.getElementById('write-spinner');
+  const writeBtnIcon = document.getElementById('write-btn-icon');
+  const writeBtnText = document.getElementById('write-btn-text');
+  const writeStopBtn = document.getElementById('write-stop-btn');
+  const writeStopText = document.getElementById('write-stop-text');
+  const writeProgressContainer = document.getElementById('write-progress-container');
+  const writeProgressText = document.getElementById('write-progress-text');
+  const writeProgressPercent = document.getElementById('write-progress-percent');
+  const writeProgressBar = document.getElementById('write-progress-bar');
+  const writeProgressStatus = document.getElementById('write-progress-status');
   
   // Tab Opener Elements
   const tabOpenerTemplate = document.getElementById('tab-opener-template');
@@ -83,7 +109,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!url) return false;
     try {
       const parsed = new URL(url);
-      return parsed.hostname === 'm.blog.naver.com' || parsed.hostname === 'blog.naver.com';
+      return parsed.hostname === 'blog.naver.com' || parsed.hostname === 'm.blog.naver.com';
     } catch (e) {
       return false;
     }
@@ -94,9 +120,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!url) return url;
     try {
       const parsed = new URL(url);
-      if (parsed.hostname === 'blog.naver.com') {
-        parsed.hostname = 'm.blog.naver.com';
+      if (parsed.hostname === 'm.blog.naver.com') return url;
+      if (parsed.hostname !== 'blog.naver.com') return url;
+
+      if (parsed.searchParams.has('blogId') && parsed.searchParams.has('logNo')) {
+        const blogId = parsed.searchParams.get('blogId');
+        const logNo = parsed.searchParams.get('logNo');
+        return `https://m.blog.naver.com/${blogId}/${logNo}`;
       }
+
+      const pathSegments = parsed.pathname.split('/').filter(Boolean);
+      if (pathSegments.length >= 2) {
+        return `https://m.blog.naver.com/${pathSegments[0]}/${pathSegments[1]}`;
+      }
+
+      parsed.hostname = 'm.blog.naver.com';
       return parsed.toString();
     } catch (e) {
       return url;
@@ -105,39 +143,38 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Tab Switcher Functions & Handlers
   function switchTab(tabId) {
+    // Reset all tabs
+    [tabBtnBlog, tabBtnCafe, tabBtnWrite].forEach(btn => btn && btn.classList.remove('active'));
+    [containerBlog, containerCafe, containerWrite].forEach(c => c && c.classList.remove('active'));
+
     if (tabId === 'cafe') {
-      tabBtnBlog.classList.remove('active');
-      tabBtnCafe.classList.add('active');
-      containerBlog.classList.remove('active');
-      containerCafe.classList.add('active');
-      try {
-        chrome.storage.local.set({ activeTab: 'cafe' });
-      } catch (e) {
-        console.error(e);
-      }
+      if (tabBtnCafe) tabBtnCafe.classList.add('active');
+      if (containerCafe) containerCafe.classList.add('active');
+    } else if (tabId === 'write') {
+      if (tabBtnWrite) tabBtnWrite.classList.add('active');
+      if (containerWrite) containerWrite.classList.add('active');
+      checkBlogWriteTabStatus();
     } else {
-      tabBtnBlog.classList.add('active');
-      tabBtnCafe.classList.remove('active');
-      containerBlog.classList.add('active');
-      containerCafe.classList.remove('active');
-      try {
-        chrome.storage.local.set({ activeTab: 'blog' });
-      } catch (e) {
-        console.error(e);
-      }
+      if (tabBtnBlog) tabBtnBlog.classList.add('active');
+      if (containerBlog) containerBlog.classList.add('active');
+    }
+
+    try {
+      chrome.storage.local.set({ activeTab: tabId });
+    } catch (e) {
+      console.error(e);
     }
   }
 
-  if (tabBtnBlog && tabBtnCafe) {
-    tabBtnBlog.addEventListener('click', () => switchTab('blog'));
-    tabBtnCafe.addEventListener('click', () => switchTab('cafe'));
-  }
+  if (tabBtnBlog) tabBtnBlog.addEventListener('click', () => switchTab('blog'));
+  if (tabBtnCafe) tabBtnCafe.addEventListener('click', () => switchTab('cafe'));
+  if (tabBtnWrite) tabBtnWrite.addEventListener('click', () => switchTab('write'));
 
   // Load last active tab & prompt checkbox from storage on startup
   try {
     chrome.storage.local.get(['activeTab', 'cafeIncludePrompt'], (result) => {
-      if (result && result.activeTab === 'cafe') {
-        switchTab('cafe');
+      if (result && result.activeTab) {
+        switchTab(result.activeTab);
       } else {
         switchTab('blog');
       }
@@ -1968,4 +2005,375 @@ ${res.content}`;
       }
     });
   }
+
+  // ==========================================
+  // ✍️ Naver Blog Auto-Write Logic
+  // ==========================================
+
+  // Apply Blog Write UI state restored from background/storage
+  function applyBlogWriteUIState(state, activeTabId) {
+    if (!state) return;
+    if (activeTabId && state.tabId && state.tabId !== activeTabId) return;
+
+    if (state.isRunning) {
+      writeStartBtn.disabled = true;
+      if (writeSpinner) writeSpinner.style.display = 'inline-block';
+      if (writeBtnIcon) writeBtnIcon.style.display = 'none';
+      if (writeBtnText) writeBtnText.textContent = '블로그 글 작성 진행 중...';
+      if (writeStopBtn) {
+        writeStopBtn.style.display = 'inline-flex';
+        writeStopBtn.disabled = false;
+        if (writeStopText) writeStopText.textContent = '중단';
+      }
+      if (writeProgressContainer) {
+        writeProgressContainer.style.display = 'block';
+        if (writeProgressBar) writeProgressBar.style.width = `${state.percent || 2}%`;
+        if (writeProgressPercent) writeProgressPercent.textContent = `${state.percent || 2}%`;
+        if (writeProgressText) writeProgressText.textContent = state.text || '작성 진행 중...';
+      }
+      if (writeProgressStatus && state.detail) {
+        writeProgressStatus.style.display = 'block';
+        writeProgressStatus.textContent = state.detail;
+      }
+    } else {
+      writeStartBtn.disabled = false;
+      if (writeSpinner) writeSpinner.style.display = 'none';
+      if (writeBtnIcon) writeBtnIcon.style.display = 'inline-block';
+      if (writeBtnText) writeBtnText.textContent = '블로그 자동 작성 시작';
+      if (writeStopBtn) writeStopBtn.style.display = 'none';
+
+      if (state.completed) {
+        if (writeProgressContainer) {
+          writeProgressContainer.style.display = 'block';
+          if (writeProgressBar) writeProgressBar.style.width = '100%';
+          if (writeProgressPercent) writeProgressPercent.textContent = '100%';
+          if (writeProgressText) writeProgressText.textContent = '원고 작성 완료!';
+        }
+        if (writeProgressStatus && state.detail) {
+          writeProgressStatus.style.display = 'block';
+          writeProgressStatus.textContent = state.detail;
+        }
+      } else if (state.cancelled) {
+        if (writeProgressContainer) {
+          writeProgressContainer.style.display = 'block';
+          if (writeProgressText) writeProgressText.textContent = '작성 중단됨';
+        }
+        if (writeProgressStatus && state.detail) {
+          writeProgressStatus.style.display = 'block';
+          writeProgressStatus.textContent = state.detail;
+        }
+      }
+    }
+  }
+
+  // Check if current tab is Naver Blog Write Editor
+  async function checkBlogWriteTabStatus() {
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!activeTab || !activeTab.url) return;
+
+      currentTab = activeTab;
+      const url = activeTab.url;
+      const isBlogEditor = url.includes('blog.naver.com') && 
+        (url.includes('Redirect=Write') || url.includes('GoBlogWrite') || url.includes('PostWriteForm') || url.includes('PostWrite'));
+
+      if (writeCurrentTabTitle) {
+        writeCurrentTabTitle.textContent = activeTab.title ? activeTab.title.substring(0, 26) + '...' : activeTab.url;
+      }
+
+      if (isBlogEditor) {
+        if (writePageStatusBadge) {
+          writePageStatusBadge.className = 'badge badge-success';
+          writePageStatusBadge.textContent = '글쓰기 에디터 연결됨';
+        }
+        if (writeOpenPageContainer) writeOpenPageContainer.style.display = 'none';
+        if (writeStartBtn) writeStartBtn.disabled = false;
+      } else {
+        if (writePageStatusBadge) {
+          writePageStatusBadge.className = 'badge badge-danger';
+          writePageStatusBadge.textContent = '글쓰기 페이지 아님';
+        }
+        if (writeOpenPageContainer) writeOpenPageContainer.style.display = 'block';
+      }
+
+      // Check real-time background status for this tab
+      chrome.runtime.sendMessage({
+        type: 'GET_BLOG_WRITE_STATUS',
+        tabId: activeTab.id
+      }, (resp) => {
+        if (resp && resp.state) {
+          applyBlogWriteUIState(resp.state, activeTab.id);
+        }
+      });
+    } catch (err) {
+      console.warn('checkBlogWriteTabStatus error:', err);
+    }
+  }
+
+  // Open Naver Blog Write page in a new tab
+  if (writeOpenPageBtn) {
+    writeOpenPageBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://blog.naver.com/GoBlogWrite.naver' });
+    });
+  }
+
+  // Sample JSON filler
+  if (writeSampleBtn) {
+    writeSampleBtn.addEventListener('click', () => {
+      const sampleData = {
+        title: "제주도 서귀포 가성비 흑돼지 맛집 솔직 후기",
+        content: [
+          {
+            subtitle: "1. 매장 위치 및 주차 안내",
+            body: "서귀포 올레시장 도보 3분 거리에 위치해 있어 접근성이 아주 훌륭했습니다.\n(IMG_01.jpg)\n가게 전용 주차 공간도 넉넉하여 렌트카로 방문하기에 안성맞춤이었어요."
+          },
+          {
+            subtitle: "2. 흑돼지 근고기 맛과 육즙",
+            body: "두툼하게 썰려 나온 흑돼지 목살과 오겹살은 참숯 향이 은은하게 배어 있었습니다.\n(IMG_02.jpg)\n멜젓에 푹 찍어 한 점 먹어보니 입안 가득 터지는 육즙이 일품이었습니다."
+          }
+        ],
+        related_topics: [
+          "📌 함께 둘러보기 좋은 서귀포 오션뷰 카페 BEST 3",
+          "📌 중문 관광단지 필수 드라이브 코스"
+        ],
+        hashtags: ["#제주도맛집", "#서귀포흑돼지", "#내돈내산", "#제주여행추천"]
+      };
+
+      if (writeJsonInput) {
+        const val = JSON.stringify(sampleData, null, 2);
+        writeJsonInput.value = val;
+        chrome.storage.local.set({ savedWriteJson: val });
+        showToast('💡 샘플 원고 JSON이 입력되었습니다!');
+      }
+    });
+  }
+
+  // JSON File upload trigger & reader
+  if (writeFileLoadBtn && writeJsonFile) {
+    writeFileLoadBtn.addEventListener('click', () => {
+      writeJsonFile.click();
+    });
+
+    writeJsonFile.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const raw = (ev.target.result || '').replace(/\u00a0/g, ' ');
+          // Verify valid JSON
+          const parsed = JSON.parse(raw);
+          if (writeJsonInput) {
+            const val = JSON.stringify(parsed, null, 2);
+            writeJsonInput.value = val;
+            chrome.storage.local.set({ savedWriteJson: val });
+            showToast(`📂 '${file.name}' 파일을 성공적으로 불러왔습니다!`);
+          }
+        } catch (err) {
+          showToast('유효한 JSON 파일 형식이 아닙니다.', true);
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+      // Reset input value to allow selecting the same file again
+      writeJsonFile.value = '';
+    });
+  }
+
+  // Auto-save blog write inputs on user typing
+  if (writeJsonInput) {
+    writeJsonInput.addEventListener('input', () => {
+      chrome.storage.local.set({ savedWriteJson: writeJsonInput.value });
+    });
+  }
+  if (writeAuthorInput) {
+    writeAuthorInput.addEventListener('input', () => {
+      chrome.storage.local.set({ savedWriteAuthor: writeAuthorInput.value });
+    });
+  }
+  if (writeAutoSave) {
+    writeAutoSave.addEventListener('change', () => {
+      chrome.storage.local.set({ savedWriteAutoSave: writeAutoSave.checked });
+    });
+  }
+  if (writeSpeedSelect) {
+    writeSpeedSelect.addEventListener('change', () => {
+      chrome.storage.local.set({ savedWriteSpeed: writeSpeedSelect.value });
+    });
+  }
+
+  // Restore saved blog write inputs on popup load
+  chrome.storage.local.get([
+    'savedWriteJson',
+    'savedWriteAuthor',
+    'savedWriteAutoSave',
+    'savedWriteSpeed',
+    'blogWriteState'
+  ], (res) => {
+    if (res.savedWriteJson !== undefined && writeJsonInput && !writeJsonInput.value) {
+      writeJsonInput.value = res.savedWriteJson;
+    }
+    if (res.savedWriteAuthor !== undefined && writeAuthorInput) {
+      writeAuthorInput.value = res.savedWriteAuthor;
+    }
+    if (res.savedWriteAutoSave !== undefined && writeAutoSave) {
+      writeAutoSave.checked = res.savedWriteAutoSave;
+    }
+    if (res.savedWriteSpeed !== undefined && writeSpeedSelect) {
+      writeSpeedSelect.value = res.savedWriteSpeed;
+    }
+    if (res.blogWriteState) {
+      applyBlogWriteUIState(res.blogWriteState);
+    }
+  });
+
+  // Blog Auto-Write Execution Button
+  if (writeStartBtn) {
+    writeStartBtn.addEventListener('click', async () => {
+      const jsonRaw = writeJsonInput ? writeJsonInput.value.trim() : '';
+      if (!jsonRaw) {
+        showToast('블로그 원고 JSON 데이터를 입력해주세요.', true);
+        if (writeJsonInput) writeJsonInput.focus();
+        return;
+      }
+
+      let blogData = null;
+      try {
+        blogData = JSON.parse(jsonRaw.replace(/\u00a0/g, ' '));
+      } catch (err) {
+        showToast('JSON 형식에 문법 오류가 있습니다. 쉼표나 따옴표를 확인해주세요.', true);
+        return;
+      }
+
+      if (!blogData.title) {
+        showToast('JSON에 "title" (제목) 항목이 누락되었습니다.', true);
+        return;
+      }
+
+      // Ensure active tab is current
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!activeTab || !activeTab.id) {
+        showToast('활성화된 탭을 찾을 수 없습니다.', true);
+        return;
+      }
+
+      const url = activeTab.url || '';
+      const isBlogEditor = url.includes('blog.naver.com') && 
+        (url.includes('Redirect=Write') || url.includes('GoBlogWrite') || url.includes('PostWriteForm') || url.includes('PostWrite'));
+
+      if (!isBlogEditor) {
+        showToast('현재 탭이 네이버 블로그 글쓰기 창이 아닙니다.', true);
+        return;
+      }
+
+      // UI state -> Writing
+      writeStartBtn.disabled = true;
+      if (writeSpinner) writeSpinner.style.display = 'inline-block';
+      if (writeBtnIcon) writeBtnIcon.style.display = 'none';
+      if (writeBtnText) writeBtnText.textContent = '블로그 글 작성 진행 중...';
+      if (writeStopBtn) {
+        writeStopBtn.style.display = 'inline-flex';
+        writeStopBtn.disabled = false;
+        if (writeStopText) writeStopText.textContent = '중단';
+      }
+      if (writeProgressContainer) {
+        writeProgressContainer.style.display = 'block';
+        if (writeProgressBar) writeProgressBar.style.width = '2%';
+        if (writeProgressPercent) writeProgressPercent.textContent = '2%';
+        if (writeProgressText) writeProgressText.textContent = '작성 준비 중...';
+      }
+      if (writeProgressStatus) {
+        writeProgressStatus.style.display = 'block';
+        writeProgressStatus.textContent = '🚀 에디터 접속 및 팝업 정리 중...';
+      }
+
+      try {
+        const authorText = writeAuthorInput ? writeAuthorInput.value : '';
+        const autoSave = writeAutoSave ? writeAutoSave.checked : true;
+        const speed = writeSpeedSelect ? writeSpeedSelect.value : 'fast';
+
+        showToast('🚀 블로그 자동 작성을 시작합니다!');
+
+        // Delegate to background service worker via Chrome DevTools Protocol (CDP)
+        const resp = await chrome.runtime.sendMessage({
+          type: 'AUTO_WRITE_BLOG',
+          tabId: activeTab.id,
+          blogData: blogData,
+          authorText: authorText,
+          autoSave: autoSave,
+          speed: speed
+        });
+
+        if (resp && resp.cancelled) {
+          showToast('🛑 사용자에 의해 작성이 중단되었습니다.');
+          if (writeProgressText) writeProgressText.textContent = '작성 중단됨';
+          if (writeProgressStatus) {
+            writeProgressStatus.textContent = '🛑 사용자에 의해 작성이 중단되었습니다.';
+          }
+        } else if (resp && resp.success) {
+          if (writeProgressBar) writeProgressBar.style.width = '100%';
+          if (writeProgressPercent) writeProgressPercent.textContent = '100%';
+          if (writeProgressText) writeProgressText.textContent = '원고 작성 완료!';
+          const saveMsg = resp.saved ? ' 및 임시저장 완료!' : ' 완료!';
+          showToast(`🎉 "${resp.title}" 글 작성${saveMsg}`);
+          if (writeProgressStatus) {
+            writeProgressStatus.textContent = `✅ 글 작성${saveMsg} (소제목 ${resp.sectionsCount}개)`;
+          }
+        } else {
+          const errMsg = resp?.error || '에디터 작성 중 오류가 발생했습니다.';
+          showToast(errMsg, true);
+          if (writeProgressStatus) {
+            writeProgressStatus.textContent = `❌ ${errMsg}`;
+          }
+        }
+      } catch (err) {
+        console.error('Blog write execution error:', err);
+        showToast('글 작성 처리 중 오류가 발생했습니다.', true);
+        if (writeProgressStatus) {
+          writeProgressStatus.textContent = '❌ 작성 오류가 발생했습니다.';
+        }
+      } finally {
+        writeStartBtn.disabled = false;
+        if (writeSpinner) writeSpinner.style.display = 'none';
+        if (writeBtnIcon) writeBtnIcon.style.display = 'inline-block';
+        if (writeBtnText) writeBtnText.textContent = '블로그 자동 작성 시작';
+        if (writeStopBtn) {
+          writeStopBtn.style.display = 'none';
+          writeStopBtn.disabled = false;
+          if (writeStopText) writeStopText.textContent = '중단';
+        }
+      }
+    });
+  }
+
+  // Blog Auto-Write Stop Button
+  if (writeStopBtn) {
+    writeStopBtn.addEventListener('click', async () => {
+      writeStopBtn.disabled = true;
+      if (writeStopText) writeStopText.textContent = '중단 중...';
+      try {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab && activeTab.id) {
+          await chrome.runtime.sendMessage({
+            type: 'STOP_AUTO_WRITE_BLOG',
+            tabId: activeTab.id
+          });
+        }
+        showToast('🛑 글 작성 중단을 요청했습니다.');
+      } catch (err) {
+        console.warn('writeStopBtn error:', err);
+      }
+    });
+  }
+
+  // Real-time progress receiver from background
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === 'AUTO_WRITE_BLOG_PROGRESS') {
+      applyBlogWriteUIState(msg);
+    }
+  });
+
+  // Initial check on popup open
+  checkBlogWriteTabStatus();
 });
+

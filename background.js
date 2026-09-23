@@ -75,6 +75,12 @@ async function showWebToast(tabId, message, isError = false) {
               opacity: 1;
               transform: translateY(0);
             }
+            @media print {
+              #nblm-toast-notification {
+                display: none !important;
+                visibility: hidden !important;
+              }
+            }
           `;
           document.head.appendChild(style);
           document.body.appendChild(toast);
@@ -363,7 +369,7 @@ const singleFileInlinerFunction = async (tabIndexInfo = null, isBatch = false) =
   }
 };
 
-// Function to save a tab as PDF (with auto-conversion of Naver Blog PC -> Mobile in background)
+// Function to save a tab as PDF (with auto-conversion of Naver Blog PC -> Mobile in background, auto-scroll & lazy-load triggers)
 async function saveTabAsPdf(tab) {
   if (!tab || !tab.id) return { success: false, message: '유효한 탭이 아닙니다.' };
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
@@ -418,70 +424,129 @@ async function saveTabAsPdf(tab) {
     console.warn('URL parsing or mobile tab creation failed:', e);
   }
 
-  // If Naver mobile blog (either converted or original mobile tab), ensure images are eager-loaded and high-res
+  // Pre-print preparation: auto-scroll for lazy load, eager-load images, inject print-only styles, and reset overflow
   try {
+    showWebToast(tab.id, '⏳ 상세 내용 및 이미지 준비 중...');
     await chrome.scripting.executeScript({
       target: { tabId: targetTabId },
       func: async () => {
         try {
+          // 1. Inject Print Optimization Styles (hides toasts, floating bars, resets overflow/height)
+          let printStyle = document.getElementById('nblm-pdf-print-fix');
+          if (!printStyle) {
+            printStyle = document.createElement('style');
+            printStyle.id = 'nblm-pdf-print-fix';
+            printStyle.textContent = `
+              @media print {
+                /* Hide toasts, floating buttons, top buttons, fixed navs */
+                #nblm-toast-notification,
+                #__singlefile_toast,
+                .btn_top, button[class*="top" i], [class*="scrollTop" i], [class*="scroll_top" i],
+                .floating_area, [class*="floating" i], [class*="Float" i],
+                .u_ft, .pop_notice, .top_banner, [class*="toast" i],
+                [class*="BottomBar" i], [class*="bottom_bar" i],
+                [class*="snackBar" i], [class*="snackbar" i] {
+                  display: none !important;
+                  visibility: hidden !important;
+                }
+
+                /* Reset overflow & height to prevent blank pages / cutoff in SPA/React layouts */
+                html, body, #root, #__next, #wrap, .wrap, main, [class*="container" i], [class*="content" i], [class*="layout" i] {
+                  overflow: visible !important;
+                  height: auto !important;
+                  max-height: none !important;
+                  min-height: auto !important;
+                  position: static !important;
+                }
+
+                img, figure {
+                  max-width: 100% !important;
+                  page-break-inside: avoid;
+                  break-inside: avoid;
+                }
+              }
+            `;
+            document.head.appendChild(printStyle);
+          }
+
+          // 2. Auto-scroll down the entire page to trigger IntersectionObserver & scroll-based lazy loading
+          const originalScrollY = window.scrollY;
+          const initialScrollHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 1000);
+          const scrollStep = Math.max(window.innerHeight, 500);
+
+          for (let pos = 0; pos < initialScrollHeight; pos += scrollStep) {
+            window.scrollTo(0, pos);
+            await new Promise(r => setTimeout(r, 60));
+          }
+
+          // Check if height increased dynamically during scroll (e.g. infinite scroll / dynamic components)
+          const updatedScrollHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+          if (updatedScrollHeight > initialScrollHeight) {
+            window.scrollTo(0, updatedScrollHeight);
+            await new Promise(r => setTimeout(r, 150));
+          }
+
+          // Restore scroll position
+          window.scrollTo(0, originalScrollY);
+
+          // 3. Eager-load and swap real URLs for all lazy images
           const imgs = Array.from(document.querySelectorAll('img'));
           const waitPromises = [];
 
           imgs.forEach(img => {
             img.loading = 'eager';
-            
-            // 1. Extract candidate URL from lazy attributes or current src
+
+            // Extract candidate URL from lazy attributes or current src
             let realSrc = img.getAttribute('data-lazy-src') || 
                           img.getAttribute('data-src') || 
                           img.getAttribute('data-original') || 
+                          img.getAttribute('data-actual-src') || 
                           img.getAttribute('lazy-src') || 
+                          img.getAttribute('_src') ||
                           img.src;
 
-            // 2. Naver Blog Blur Replacement: replace w80_blur or _blur with HD w966
+            // Naver blur replacement & HD upgrade
             if (realSrc) {
               if (realSrc.includes('w80_blur')) {
                 realSrc = realSrc.replace('w80_blur', 'w966');
               } else if (realSrc.includes('_blur')) {
                 realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
               }
-              // Also upgrade small w400 thumbnails to w966 if on Naver image server
               if (realSrc.includes('type=w400')) {
                 realSrc = realSrc.replace('type=w400', 'type=w966');
               }
             }
 
-            // 3. Update img.src and wait for it to complete loading
             if (realSrc && img.src !== realSrc) {
               img.src = realSrc;
-              if (!img.complete) {
-                waitPromises.push(new Promise(res => {
-                  img.onload = img.onerror = res;
-                  setTimeout(res, 3500); // 3.5s timeout per image safety
-                }));
-              }
+            }
+
+            if (img.src && !img.complete) {
+              waitPromises.push(new Promise(res => {
+                img.onload = img.onerror = res;
+                setTimeout(res, 3500); // 3.5s timeout safety per image
+              }));
             }
           });
 
-          // Hide unwanted floating bars & footer widgets
-          const floaters = document.querySelectorAll('.u_ft, .floating_area, .top_banner, .btn_top, .pop_notice');
-          floaters.forEach(el => el.style.display = 'none');
-
-          // Wait for all HD images to finish loading in parallel
+          // Wait for all images and web fonts
           if (waitPromises.length > 0) {
             await Promise.all(waitPromises);
           }
+          if (document.fonts && document.fonts.ready) {
+            await document.fonts.ready.catch(() => {});
+          }
         } catch (e) {
-          console.error('HD image preparation failed:', e);
+          console.error('Pre-print preparation failed:', e);
         }
       }
     });
     // Brief settle buffer for layout reflow
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise((resolve) => setTimeout(resolve, 500));
   } catch (e) {
-    console.warn('Image preloading execution failed:', e);
+    console.warn('Pre-print script execution failed:', e);
   }
 
-  showWebToast(tab.id, '⏳ PDF 파일 생성 중...');
   let pdfSaved = false;
 
   try {
@@ -493,10 +558,11 @@ async function saveTabAsPdf(tab) {
         printBackground: true,
         paperWidth: 8.27,
         paperHeight: 11.69,
-        marginTop: 0.4,
-        marginBottom: 0.4,
-        marginLeft: 0.4,
-        marginRight: 0.4
+        marginTop: 0.3,
+        marginBottom: 0.3,
+        marginLeft: 0.3,
+        marginRight: 0.3,
+        preferCSSPageSize: false
       }
     );
     await chrome.debugger.detach({ tabId: targetTabId });
@@ -1505,5 +1571,617 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+
+  // Handle Stop Blog Auto-Write
+  if (message.type === 'STOP_AUTO_WRITE_BLOG') {
+    const jobState = activeBlogWriteJobs.get(message.tabId);
+    if (jobState) {
+      jobState.cancelled = true;
+      showWebToast(message.tabId, '🛑 블로그 자동 작성 중단 요청을 수신했습니다...');
+      sendResponse({ success: true, message: '중단 요청이 전달되었습니다.' });
+    } else {
+      sendResponse({ success: false, message: '진행 중인 작성 작업이 없습니다.' });
+    }
+    return true;
+  }
+
+  // Query active blog write status
+  if (message.type === 'GET_BLOG_WRITE_STATUS') {
+    const jobState = activeBlogWriteJobs.get(message.tabId);
+    chrome.storage.local.get(['blogWriteState'], (res) => {
+      const state = res.blogWriteState;
+      const isRunning = !!(jobState && !jobState.cancelled && state && state.isRunning);
+      sendResponse({ success: true, isRunning, state });
+    });
+    return true;
+  }
+
+  // Handle Naver Blog Auto-Write via Chrome DevTools Protocol (CDP)
+  if (message.type === 'AUTO_WRITE_BLOG') {
+    (async () => {
+      const { tabId, blogData, authorText, autoSave, speed } = message;
+      try {
+        const result = await autoWriteNaverBlogWithCdp(tabId, { blogData, authorText, autoSave, speed });
+        sendResponse(result);
+      } catch (err) {
+        console.error('AUTO_WRITE_BLOG failed:', err);
+        sendResponse({ success: false, error: err.message || '블로그 자동 작성에 실패했습니다.' });
+      }
+    })();
+    return true;
+  }
 });
+
+// Active CDP Blog Writer Jobs Map (tabId -> { cancelled: boolean })
+const activeBlogWriteJobs = new Map();
+
+// ==============================================================================
+// ✍️ Chrome DevTools Protocol (CDP) Powered Naver Blog Auto-Writer Engine
+// ==============================================================================
+async function autoWriteNaverBlogWithCdp(tabId, { blogData, authorText, autoSave, speed }) {
+  if (!tabId || !blogData) {
+    return { success: false, error: '유효한 탭 또는 블로그 데이터가 없습니다.' };
+  }
+
+  const jobState = { cancelled: false };
+  activeBlogWriteJobs.set(tabId, jobState);
+
+  function checkCancelled() {
+    if (jobState.cancelled) {
+      const err = new Error('USER_CANCELLED');
+      err.isCancelled = true;
+      throw err;
+    }
+  }
+
+  function reportProgress(percent, text, detail = '') {
+    const p = Math.min(100, Math.max(0, Math.round(percent)));
+    const stateObj = {
+      tabId,
+      isRunning: p < 100,
+      completed: p === 100,
+      title: blogData.title,
+      percent: p,
+      text,
+      detail
+    };
+    chrome.storage.local.set({ blogWriteState: stateObj });
+    chrome.runtime.sendMessage({
+      type: 'AUTO_WRITE_BLOG_PROGRESS',
+      ...stateObj
+    }).catch(() => {});
+  }
+
+  const isFast = speed === 'fast';
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Helper to send CDP command
+  async function sendCdp(method, params = {}) {
+    return await chrome.debugger.sendCommand({ tabId }, method, params);
+  }
+
+  // Native CDP Keyboard Helpers (matching Playwright keyboard behavior exactly)
+  async function cdpType(text, delayMs = 0) {
+    if (!text) return;
+    const chars = Array.from(text);
+    if (delayMs > 0 || chars.length <= 40) {
+      for (const char of chars) {
+        await sendCdp('Input.insertText', { text: char });
+        if (delayMs > 0) await sleep(delayMs);
+      }
+    } else {
+      await sendCdp('Input.insertText', { text });
+    }
+  }
+
+  async function cdpPressEnter() {
+    await sendCdp('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      windowsVirtualKeyCode: 13,
+      key: 'Enter',
+      code: 'Enter',
+      text: '\r',
+      unmodifiedText: '\r'
+    });
+    await sleep(30);
+    await sendCdp('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      windowsVirtualKeyCode: 13,
+      key: 'Enter',
+      code: 'Enter'
+    });
+    await sleep(30);
+  }
+
+  async function cdpPressArrowDown() {
+    await sendCdp('Input.dispatchKeyEvent', {
+      type: 'rawKeyDown',
+      windowsVirtualKeyCode: 40,
+      key: 'ArrowDown',
+      code: 'ArrowDown'
+    });
+    await sleep(25);
+    await sendCdp('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      windowsVirtualKeyCode: 40,
+      key: 'ArrowDown',
+      code: 'ArrowDown'
+    });
+    await sleep(25);
+  }
+
+  async function cdpPressPageDown() {
+    await sendCdp('Input.dispatchKeyEvent', {
+      type: 'rawKeyDown',
+      windowsVirtualKeyCode: 34,
+      key: 'PageDown',
+      code: 'PageDown'
+    });
+    await sleep(25);
+    await sendCdp('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      windowsVirtualKeyCode: 34,
+      key: 'PageDown',
+      code: 'PageDown'
+    });
+    await sleep(25);
+  }
+
+  // Real Frame Click: Calculates viewport coordinates of element inside iframe#mainFrame and sends pure native CDP mouse events
+  async function cdpClick(selector, { waitAfter = 200, clickCount = 1 } = {}) {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (sel) => {
+        const frame = document.querySelector('iframe#mainFrame');
+        const doc = frame?.contentDocument || document;
+        const win = frame?.contentWindow || window;
+        const frameRect = frame ? frame.getBoundingClientRect() : { left: 0, top: 0 };
+
+        let el = null;
+        const selectors = sel.split(',').map(s => s.trim());
+        for (const s of selectors) {
+          try {
+            const found = doc.querySelector(s);
+            if (found) {
+              const r = found.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                el = found;
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+        if (!el) return null;
+
+        // Ensure visible
+        el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return null;
+
+        let clickX = frameRect.left + r.left + r.width / 2;
+        let clickY = frameRect.top + r.top + r.height / 2;
+
+        // For canvas-bottom, click 20px below top of it
+        if (el.classList.contains('se-canvas-bottom')) {
+          clickY = frameRect.top + r.top + Math.min(r.height / 2, 20);
+        }
+
+        // Focus element safely
+        try {
+          if (typeof el.focus === 'function') el.focus();
+        } catch (e) {}
+
+        // If clicking an editable node, place caret inside it
+        try {
+          if (el.isContentEditable || el.closest('[contenteditable="true"]')) {
+            const sel = win.getSelection();
+            const range = doc.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        } catch (e) {}
+
+        return {
+          x: Math.round(clickX),
+          y: Math.round(clickY),
+          found: true
+        };
+      },
+      args: [selector]
+    });
+
+    const info = res?.[0]?.result;
+    if (!info || !info.found) {
+      return false;
+    }
+
+    // Pure native CDP mouse events
+    await sendCdp('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: info.x,
+      y: info.y
+    });
+    await sleep(25);
+
+    for (let c = 1; c <= clickCount; c++) {
+      await sendCdp('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: info.x,
+        y: info.y,
+        button: 'left',
+        buttons: 1,
+        clickCount: c
+      });
+      await sleep(35);
+      await sendCdp('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: info.x,
+        y: info.y,
+        button: 'left',
+        buttons: 0,
+        clickCount: c
+      });
+      await sleep(25);
+    }
+
+    if (waitAfter > 0) {
+      await sleep(waitAfter);
+    }
+    return true;
+  }
+
+  let attached = false;
+  try {
+    reportProgress(5, '에디터 접속 및 팝업 정리 중...', '🚀 에디터 접속 및 팝업 정리 중...');
+    showWebToast(tabId, '🚀 블로그 자동 작성을 시작합니다...');
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+
+    // 1. 팝업 / 도움말 안전하게 닫기
+    const popupRes = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const frame = document.querySelector('iframe#mainFrame');
+        const doc = frame?.contentDocument || document;
+        const cancelBtn = doc.querySelector('.se-popup-container button.se-popup-button-cancel');
+        if (cancelBtn && cancelBtn.getBoundingClientRect().width > 0) return '.se-popup-container button.se-popup-button-cancel';
+        const helpClose = doc.querySelector('.se-help-panel button.se-help-panel-close-button');
+        if (helpClose && helpClose.getBoundingClientRect().width > 0) return '.se-help-panel button.se-help-panel-close-button';
+        return null;
+      }
+    });
+    const popupSel = popupRes?.[0]?.result;
+    if (popupSel) {
+      await cdpClick(popupSel, { waitAfter: 300 });
+    }
+
+    reportProgress(10, '스마트에디터 연결 확인 중...', '🔍 스마트에디터 로딩 감지 중...');
+
+    // 2. 스마트에디터 제목 입력 영역 대기 (최대 10초)
+    const titleParagraphSelector = 'div.se-component.se-documentTitle .se-title-text p.se-text-paragraph, .se-documentTitle [contenteditable="true"]';
+    const contentParagraphSelector = 'div.se-component.se-text .se-component-content p.se-text-paragraph, div.se-component.se-text p.se-text-paragraph';
+
+    let titleReady = false;
+    for (let wait = 0; wait < 20; wait++) {
+      const checkRes = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (sel) => {
+          const frame = document.querySelector('iframe#mainFrame');
+          const doc = frame?.contentDocument || document;
+          const el = doc.querySelector(sel);
+          if (!el) return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        },
+        args: [titleParagraphSelector]
+      });
+      if (checkRes?.[0]?.result) {
+        titleReady = true;
+        break;
+      }
+      await sleep(500);
+    }
+
+    if (!titleReady) {
+      throw new Error('스마트에디터 로딩을 감지하지 못했습니다. 글쓰기 화면이 정상적으로 열려 있는지 확인해주세요.');
+    }
+
+    checkCancelled();
+
+    // 제목 입력 영역 클릭
+    const titleClicked = await cdpClick(titleParagraphSelector, { waitAfter: 200, clickCount: 1 });
+    if (!titleClicked) {
+      throw new Error('제목 입력 영역을 클릭하지 못했습니다.');
+    }
+
+    checkCancelled();
+    reportProgress(12, '제목 입력 중...', `📝 제목: ${blogData.title.substring(0, 22)}...`);
+
+    // 제목 입력 (CDP insertText)
+    await cdpType(blogData.title);
+    await sleep(200);
+
+    // 제목 입력 후 엔터
+    await cdpPressEnter();
+    await sleep(200);
+
+    checkCancelled();
+
+    // 🔴 핵심: 제목에서 빠져나와 본문 첫 문단으로 직접 클릭 이동 (new-common-write.js & blog-write.js 1:1)
+    let bodyFocused = await cdpClick(contentParagraphSelector, { waitAfter: 250, clickCount: 1 });
+    if (!bodyFocused) {
+      await cdpClick('div.se-canvas-bottom, .se-canvas-bottom', { waitAfter: 300 });
+      bodyFocused = await cdpClick(contentParagraphSelector, { waitAfter: 250, clickCount: 1 });
+    }
+
+    // 안전 확인: 제목에 커서가 남아있는지 검사하고 필요시 강제 이동
+    async function ensureFocusNotInTitle() {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (bodySel) => {
+          const frame = document.querySelector('iframe#mainFrame');
+          const doc = frame?.contentDocument || document;
+          const win = frame?.contentWindow || window;
+          const sel = win.getSelection();
+          const anchor = sel?.anchorNode;
+          const anchorEl = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+          const inTitle = !!anchorEl?.closest('.se-documentTitle, .se-title-text');
+          if (inTitle) {
+            const allP = Array.from(doc.querySelectorAll('div.se-component.se-text p.se-text-paragraph'));
+            const targetP = allP[allP.length - 1];
+            if (targetP) {
+              targetP.focus();
+              const range = doc.createRange();
+              range.selectNodeContents(targetP);
+              range.collapse(false);
+              sel.removeAllRanges();
+              sel.addRange(range);
+            }
+          }
+        },
+        args: [contentParagraphSelector]
+      });
+    }
+
+    await ensureFocusNotInTitle();
+    checkCancelled();
+
+    reportProgress(15, '상단 서식 및 구분선 구성 중...', '✨ 구분선 및 상단 서식 배치 중...');
+
+    // 3. 상단 작성자 표기 (선택 사항)
+    if (authorText && authorText.trim()) {
+      await cdpType(authorText.trim());
+      await cdpPressEnter();
+      await sleep(200);
+    }
+
+    checkCancelled();
+
+    // 4. 구분선 추가 (정확히 1개만 깔끔하게 삽입)
+    try {
+      const hrBtnSelector = 'button.se-insert-horizontal-line-default-toolbar-button, li.se-toolbar-item-insert-horizontal-line button';
+      const hrClicked = await cdpClick(hrBtnSelector, { waitAfter: 250 });
+      if (hrClicked) {
+        // 구분선 삽입 후 아래로 이동하여 새 문단 생성
+        await cdpPressArrowDown();
+        await sleep(80);
+        await cdpPressEnter();
+        await sleep(150);
+      }
+    } catch (e) {
+      console.warn('구분선 삽입 무시:', e.message);
+    }
+
+    await ensureFocusNotInTitle();
+    checkCancelled();
+
+    // 이미지 설명 맵 생성 (id 기반 매핑)
+    const imageMap = new Map();
+    if (Array.isArray(blogData.images)) {
+      for (const img of blogData.images) {
+        if (img && img.id != null) {
+          const desc = (img.description || img.recommended_filename || `이미지 ${img.id}`).trim();
+          imageMap.set(String(img.id), desc);
+        }
+      }
+    }
+
+    // 5. 본문 입력 처리 (Array)
+    const contents = Array.isArray(blogData.content) ? blogData.content : [{ body: String(blogData.content || '') }];
+    const totalSec = Math.max(1, contents.length);
+
+    for (let i = 0; i < contents.length; i++) {
+      checkCancelled();
+      const section = contents[i];
+      const secProgress = 15 + Math.round((i / totalSec) * 65);
+
+      // 소제목(subtitle)이 있는 경우 - 인용구 밑줄 스타일 적용
+      if (section.subtitle) {
+        reportProgress(secProgress, `소제목 작성 중 [${i + 1}/${totalSec}]`, `✍️ [${i + 1}/${totalSec}] 소제목 작성 중...`);
+        showWebToast(tabId, `✍️ [${i + 1}/${totalSec}] 소제목 작성 중...`);
+
+        // 인용구 드롭다운 열기
+        const quoteBtnSelector = 'div[data-name="insert-quotation"] button.se-document-toolbar-select-option-button, button.se-insert-quotation-default-toolbar-button, li.se-toolbar-item-quotation button';
+        await cdpClick(quoteBtnSelector, { waitAfter: 200 });
+
+        // 밑줄 스타일 옵션 클릭
+        const quoteUnderlineSelector = 'button.se-toolbar-option-insert-quotation-quotation_underline-button, button.se-insert-menu-sub-panel-button-quotation-quotation_underline, button[data-name="quotation_underline"]';
+        await cdpClick(quoteUnderlineSelector, { waitAfter: 350 });
+
+        checkCancelled();
+
+        // 🔴 핵심: 생성된 인용구 내부 문단(p.se-text-paragraph)을 찾아 명시적으로 클릭 포커스
+        const quoteParagraphSelector = 'div.se-component.se-quotation:last-of-type p.se-text-paragraph, div.se-quotation-underline p.se-text-paragraph';
+        await cdpClick(quoteParagraphSelector, { waitAfter: 150, clickCount: 1 });
+
+        // 소제목 타이핑 (이모지 포함 안전하게 글자별 타이핑)
+        await cdpType(section.subtitle, isFast ? 15 : 30);
+        await sleep(150);
+
+        // 🔴 소제목 인용구 빠져나오기: ArrowDown 2회 + 캔버스 바닥 클릭
+        await cdpPressArrowDown();
+        await sleep(80);
+        await cdpPressArrowDown();
+        await sleep(80);
+        await cdpClick('div.se-canvas-bottom, .se-canvas-bottom', { waitAfter: 200 });
+      }
+
+      // 본문 내용(body) 입력
+      if (section.body) {
+        const bodyProgress = 15 + Math.round(((i + 0.5) / totalSec) * 65);
+        reportProgress(bodyProgress, `본문 작성 중 [${i + 1}/${totalSec}]`, `✍️ [${i + 1}/${totalSec}] 본문 내용 작성 중...`);
+        showWebToast(tabId, `✍️ [${i + 1}/${totalSec}] 본문 내용 작성 중...`);
+        await ensureFocusNotInTitle();
+
+        const lines = section.body.split('\n');
+        for (let k = 0; k < lines.length; k++) {
+          checkCancelled();
+          const line = lines[k];
+          if (line) {
+            // 다양한 이미지 표기 패턴 지원:
+            // 1. (IMG_6989.jpg) 또는 (IMG_6989.png)
+            // 2. [📷 이미지 1 삽입 위치], [이미지 1 삽입 위치], [사진 1] 등
+            const imgPattern = /\((IMG_\d+\.(?:jpg|jpeg|png))\)|\[(?:📷\s*)?(?:이미지|사진)\s*(\d+)[^\]]*\]/gi;
+            let lastIndex = 0;
+            let match;
+
+            while ((match = imgPattern.exec(line)) !== null) {
+              const textBefore = line.substring(lastIndex, match.index);
+              const imgFile = match[1];
+              const imgId = match[2];
+
+              if (textBefore.trim()) {
+                await cdpType(textBefore);
+              }
+
+              // 이미지 가이드 텍스트 생성
+              let guideText = '';
+              if (imgId) {
+                const desc = imageMap.get(String(imgId));
+                guideText = desc ? `${imgId}. ${desc}` : `이미지 ${imgId}`;
+              } else if (imgFile) {
+                guideText = imgFile;
+              }
+
+              // 이미지 가이드 삽입 및 줄바꿈
+              await cdpPressEnter();
+              await cdpType(`📷 [사진 넣을 곳: ${guideText}]`, 10);
+              await cdpPressEnter();
+              await sleep(100);
+
+              lastIndex = imgPattern.lastIndex;
+            }
+
+            const textAfter = line.substring(lastIndex);
+            if (textAfter.trim()) {
+              await cdpType(textAfter);
+            }
+          }
+          // 줄바꿈
+          await cdpPressEnter();
+          if (lines.length > 5) await sleep(isFast ? 20 : 40);
+        }
+        await sleep(100);
+      }
+      await sleep(100);
+    }
+
+    checkCancelled();
+
+    // 6. 연관 주제(주변 코스) 입력 추가
+    if (blogData.related_topics && blogData.related_topics.length > 0) {
+      reportProgress(83, '연관 추천 코스 작성 중...', '📌 주변 추천 코스 작성 중...');
+      showWebToast(tabId, '📌 연관 주제 작성 중...');
+      await ensureFocusNotInTitle();
+      for (const topic of blogData.related_topics) {
+        checkCancelled();
+        await cdpType(topic);
+        await cdpPressEnter();
+        await sleep(isFast ? 25 : 50);
+      }
+      await cdpPressEnter();
+      await sleep(150);
+    }
+
+    checkCancelled();
+
+    // 7. 해시태그 입력 (맨 마지막에)
+    if (blogData.hashtags && blogData.hashtags.length > 0) {
+      reportProgress(90, '해시태그 작성 중...', '🏷️ 해시태그 배치 중...');
+      showWebToast(tabId, '🏷️ 해시태그 작성 중...');
+      await cdpPressPageDown();
+      await sleep(150);
+      await cdpClick('div.se-canvas-bottom, .se-canvas-bottom', { waitAfter: 200 });
+
+      checkCancelled();
+      const tagStr = blogData.hashtags.map(t => t.startsWith('#') ? t : `#${t}`).join(' ');
+      await cdpType(tagStr);
+      await cdpPressEnter();
+      await sleep(200);
+    }
+
+    checkCancelled();
+
+    // 8. 임시저장 처리
+    let saved = false;
+    if (autoSave) {
+      reportProgress(95, '임시저장 진행 중...', '💾 네이버 임시저장 클릭 중...');
+      showWebToast(tabId, '💾 임시저장 진행 중...');
+      const saveBtnSelector = 'button[data-click-area="tpb.save"], button[class*="save_btn"]';
+      saved = await cdpClick(saveBtnSelector, { waitAfter: 1500 });
+    }
+
+    reportProgress(100, '원고 작성 완료!', `🎉 "${blogData.title}" 글 작성이 완료되었습니다!`);
+    showWebToast(tabId, `🎉 "${blogData.title}" 글 작성이 완료되었습니다!`);
+
+    return {
+      success: true,
+      title: blogData.title,
+      sectionsCount: contents.length,
+      saved: saved
+    };
+
+  } catch (err) {
+    if (err.isCancelled || err.message === 'USER_CANCELLED') {
+      showWebToast(tabId, '🛑 블로그 자동 작성이 중단되었습니다.');
+      chrome.storage.local.set({
+        blogWriteState: {
+          tabId,
+          isRunning: false,
+          cancelled: true,
+          title: blogData.title,
+          percent: 0,
+          text: '작성 중단됨',
+          detail: '🛑 사용자에 의해 작성이 중단되었습니다.'
+        }
+      });
+      return {
+        success: false,
+        cancelled: true,
+        message: '사용자에 의해 작성이 중단되었습니다.'
+      };
+    }
+    chrome.storage.local.set({
+      blogWriteState: {
+        tabId,
+        isRunning: false,
+        error: true,
+        title: blogData.title,
+        text: '오류 발생',
+        detail: err.message || '작성 중 오류가 발생했습니다.'
+      }
+    });
+    throw err;
+  } finally {
+    activeBlogWriteJobs.delete(tabId);
+    if (attached) {
+      try {
+        await chrome.debugger.detach({ tabId });
+      } catch (e) {}
+    }
+  }
+}
+
 
