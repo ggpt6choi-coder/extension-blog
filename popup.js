@@ -753,8 +753,10 @@ ${cleanedText}
       if (pdfStopBtn) pdfStopBtn.style.display = 'none';
       if (copyBtn) copyBtn.disabled = false;
       if (pdfSaveBtn) pdfSaveBtn.disabled = false;
-      if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
-      showToast(`🎉 총 ${msg.saved}개 탭 PDF 저장 완료!`);
+      const toastMsg = msg.folder 
+        ? `🎉 '${msg.folder}' 폴더에 총 ${msg.saved}개 PDF 저장 완료!`
+        : `🎉 총 ${msg.saved}개 탭 PDF 저장 완료!`;
+      showToast(toastMsg);
     }
   });
 
@@ -1861,7 +1863,10 @@ ${cleanedText}
           if (resp && resp.cancelled) {
             showToast(`⏹️ 총 ${resp.saved}개 저장 후 일괄 저장이 중지되었습니다.`);
           } else if (resp && resp.success) {
-            showToast(`🎉 총 ${resp.saved}개 탭 PDF 저장 완료!`);
+            const toastMsg = resp.folder 
+              ? `🎉 '${resp.folder}' 폴더에 총 ${resp.saved}개 탭 PDF 저장 완료!`
+              : `🎉 총 ${resp.saved}개 탭 PDF 저장 완료!`;
+            showToast(toastMsg);
           } else {
             showToast('일괄 저장 처리 중 오류가 발생했습니다.', true);
           }

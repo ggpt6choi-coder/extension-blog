@@ -433,7 +433,7 @@ const singleFileInlinerFunction = async (tabIndexInfo = null, isBatch = false) =
 };
 
 // Function to save a tab as PDF (with auto-conversion of Naver Blog PC -> Mobile in background, auto-scroll & lazy-load triggers)
-async function saveTabAsPdf(tab) {
+async function saveTabAsPdf(tab, options = {}) {
   if (!tab || !tab.id) return { success: false, message: '유효한 탭이 아닙니다.' };
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
     return { success: false, message: '시스템 페이지는 지원하지 않습니다.' };
@@ -699,14 +699,32 @@ async function saveTabAsPdf(tab) {
         } catch (e) {}
       }
       
-      const sanitizeTitle = title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 30);
+      let savedTitle = 'PDF_문서';
+      let savedFolder = null;
+      let finalFilename = '';
+
+      const sanitizeTitle = title.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '').substring(0, 35) || 'PDF_문서';
+      savedTitle = sanitizeTitle;
+
       const today = new Date();
       const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      const filename = `${sanitizeTitle}_${dateStr}.pdf`;
+      const baseFilename = `${sanitizeTitle}_${dateStr}.pdf`;
+      finalFilename = baseFilename;
+
+      let usedSubfolder = options.subfolder || null;
+      if (options.isBatch && !usedSubfolder) {
+        usedSubfolder = sanitizeTitle;
+      }
+
+      if (usedSubfolder) {
+        const safeFolder = usedSubfolder.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '').substring(0, 40) || 'PDF_문서';
+        finalFilename = `${safeFolder}/${baseFilename}`;
+        savedFolder = safeFolder;
+      }
 
       await chrome.downloads.download({
         url: dataUrl,
-        filename: filename,
+        filename: finalFilename,
         saveAs: false
       });
 
@@ -739,7 +757,14 @@ async function saveTabAsPdf(tab) {
     }
   }
 
-  return { success: true, isConverted, message: 'PDF 다운로드가 시작되었습니다.' };
+  return { 
+    success: true, 
+    isConverted, 
+    title: savedTitle, 
+    folder: savedFolder, 
+    filename: finalFilename,
+    message: 'PDF 다운로드가 시작되었습니다.' 
+  };
 }
 
 // Global Hotkeys Command Listener
@@ -1777,9 +1802,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         total: tabIds.length,
         saved: 0,
         title: '',
+        folder: '',
         status: 'processing'
       };
       await chrome.storage.local.set({ batchPdfState }).catch(() => {});
+
+      let batchFolder = null;
 
       for (let i = 0; i < tabIds.length; i++) {
         if (isBatchPdfCancelled) {
@@ -1807,13 +1835,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           current: i + 1,
           total: tabIds.length,
           title: tab.title || '페이지',
+          folder: batchFolder || '',
           status: 'processing'
         }).catch(() => {});
 
         try {
-          const res = await saveTabAsPdf(tab);
+          const res = await saveTabAsPdf(tab, { isBatch: true, subfolder: batchFolder });
           if (res && res.success) {
             successCount++;
+            if (!batchFolder && res.folder) {
+              batchFolder = res.folder;
+              batchPdfState.folder = batchFolder;
+            }
             batchPdfState.saved = successCount;
             batchPdfState.status = 'downloaded';
             chrome.storage.local.set({ batchPdfState }).catch(() => {});
@@ -1832,6 +1865,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           current: i + 1,
           total: tabIds.length,
           title: tab.title || '페이지',
+          folder: batchFolder || '',
           status: 'downloaded'
         }).catch(() => {});
 
@@ -1852,17 +1886,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.runtime.sendMessage({
           type: 'BATCH_SAVE_PDF_CANCELLED',
           total: tabIds.length,
-          saved: successCount
+          saved: successCount,
+          folder: batchFolder || ''
         }).catch(() => {});
 
         try {
           const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
           if (activeTab && activeTab.id) {
-            showWebToast(activeTab.id, `⏹️ PDF 일괄 저장이 중지되었습니다. (${successCount}/${tabIds.length}개 완료)`);
+            const cancelMsg = batchFolder 
+              ? `⏹️ '${batchFolder}' 폴더에 ${successCount}/${tabIds.length}개 저장 후 중지되었습니다.`
+              : `⏹️ PDF 일괄 저장이 중지되었습니다. (${successCount}/${tabIds.length}개 완료)`;
+            showWebToast(activeTab.id, cancelMsg);
           }
         } catch (e) {}
 
-        sendResponse({ success: false, cancelled: true, total: tabIds.length, saved: successCount });
+        sendResponse({ success: false, cancelled: true, total: tabIds.length, saved: successCount, folder: batchFolder });
         return;
       }
 
@@ -1870,18 +1908,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.runtime.sendMessage({
         type: 'BATCH_SAVE_PDF_COMPLETE',
         total: tabIds.length,
-        saved: successCount
+        saved: successCount,
+        folder: batchFolder || ''
       }).catch(() => {});
 
       // Notify active tab with toast
       try {
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (activeTab && activeTab.id) {
-          showWebToast(activeTab.id, `🎉 총 ${successCount}개 탭 PDF 일괄 저장 완료!`);
+          const completeMsg = batchFolder 
+            ? `🎉 '${batchFolder}' 폴더에 총 ${successCount}개 탭 PDF 저장 완료!`
+            : `🎉 총 ${successCount}개 탭 PDF 일괄 저장 완료!`;
+          showWebToast(activeTab.id, completeMsg);
         }
       } catch (e) {}
 
-      sendResponse({ success: true, total: tabIds.length, saved: successCount });
+      sendResponse({ success: true, total: tabIds.length, saved: successCount, folder: batchFolder });
     })();
     return true;
   }
