@@ -1626,13 +1626,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Batch Save PDF across multiple tabs (sequential processing with progress notifications)
+  // Global state for Batch PDF Cancellation
+  let isBatchPdfCancelled = false;
+  let batchPdfState = {
+    isRunning: false,
+    current: 0,
+    total: 0,
+    saved: 0
+  };
+
+  // Batch Save PDF across multiple tabs (sequential processing with progress notifications & cancellation)
   if (message.type === 'BATCH_SAVE_PDF_TABS') {
     (async () => {
       const tabIds = message.tabIds || [];
       let successCount = 0;
+      isBatchPdfCancelled = false;
+      batchPdfState = {
+        isRunning: true,
+        current: 0,
+        total: tabIds.length,
+        saved: 0
+      };
 
       for (let i = 0; i < tabIds.length; i++) {
+        if (isBatchPdfCancelled) {
+          break;
+        }
+
         const tabId = tabIds[i];
         let tab = null;
         try {
@@ -1642,6 +1662,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
           continue;
         }
+
+        batchPdfState.current = i + 1;
 
         // Broadcast start of current tab
         chrome.runtime.sendMessage({
@@ -1656,9 +1678,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const res = await saveTabAsPdf(tab);
           if (res && res.success) {
             successCount++;
+            batchPdfState.saved = successCount;
           }
         } catch (err) {
           console.error(`Batch PDF tab ${tabId} failed:`, err);
+        }
+
+        if (isBatchPdfCancelled) {
+          break;
         }
 
         // Broadcast finished for this tab
@@ -1670,10 +1697,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           status: 'downloaded'
         }).catch(() => {});
 
-        // Delay between tabs to let debugger detach cleanly
+        // Delay between tabs to let debugger detach cleanly (checkable in 100ms intervals)
         if (i < tabIds.length - 1) {
-          await new Promise(r => setTimeout(r, 1000));
+          for (let d = 0; d < 10; d++) {
+            if (isBatchPdfCancelled) break;
+            await new Promise(r => setTimeout(r, 100));
+          }
         }
+      }
+
+      batchPdfState.isRunning = false;
+
+      if (isBatchPdfCancelled) {
+        chrome.runtime.sendMessage({
+          type: 'BATCH_SAVE_PDF_CANCELLED',
+          total: tabIds.length,
+          saved: successCount
+        }).catch(() => {});
+
+        try {
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (activeTab && activeTab.id) {
+            showWebToast(activeTab.id, `⏹️ PDF 일괄 저장이 중지되었습니다. (${successCount}/${tabIds.length}개 완료)`);
+          }
+        } catch (e) {}
+
+        sendResponse({ success: false, cancelled: true, total: tabIds.length, saved: successCount });
+        return;
       }
 
       // Broadcast all tabs complete
@@ -1693,6 +1743,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       sendResponse({ success: true, total: tabIds.length, saved: successCount });
     })();
+    return true;
+  }
+
+  // Cancel Batch PDF Handler
+  if (message.type === 'CANCEL_BATCH_PDF') {
+    isBatchPdfCancelled = true;
+    batchPdfState.isRunning = false;
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // Query Batch PDF Status Handler
+  if (message.type === 'GET_BATCH_PDF_STATUS') {
+    sendResponse(batchPdfState);
     return true;
   }
 
@@ -1741,19 +1805,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Batch Save HTML across multiple tabs (Instant per-tab download via chrome.downloads API)
+  // Global state for Batch HTML Cancellation
+  let isBatchHtmlCancelled = false;
+  let batchHtmlState = {
+    isRunning: false,
+    current: 0,
+    total: 0,
+    saved: 0
+  };
+
+  // Batch Save HTML across multiple tabs (Instant per-tab download via chrome.downloads API with cancellation)
   if (message.type === 'BATCH_SAVE_HTML_TABS') {
     (async () => {
       const tabIds = message.tabIds || [];
       let successCount = 0;
+      isBatchHtmlCancelled = false;
+      batchHtmlState = {
+        isRunning: true,
+        current: 0,
+        total: tabIds.length,
+        saved: 0
+      };
 
       for (let i = 0; i < tabIds.length; i++) {
+        if (isBatchHtmlCancelled) {
+          break;
+        }
+
         const tabId = tabIds[i];
         let tabTitle = '페이지';
         try {
           const tab = await chrome.tabs.get(tabId);
           if (tab && tab.title) tabTitle = tab.title;
         } catch (e) {}
+
+        batchHtmlState.current = i + 1;
 
         // Broadcast start of current tab
         chrome.runtime.sendMessage({
@@ -1771,6 +1857,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             args: [`${i + 1}/${tabIds.length}`, true],
             func: singleFileInlinerFunction
           });
+
+          if (isBatchHtmlCancelled) {
+            break;
+          }
 
           if (execResult && execResult.result && execResult.result.htmlContent) {
             const res = execResult.result;
@@ -1794,6 +1884,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
 
             successCount++;
+            batchHtmlState.saved = successCount;
 
             // Broadcast download complete for this tab
             chrome.runtime.sendMessage({
@@ -1807,11 +1898,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           // Short delay between tabs to prevent browser congestion
           if (i < tabIds.length - 1) {
-            await new Promise(r => setTimeout(r, 600));
+            for (let d = 0; d < 6; d++) {
+              if (isBatchHtmlCancelled) break;
+              await new Promise(r => setTimeout(r, 100));
+            }
           }
         } catch (err) {
           console.error(`Batch save tab ${tabId} failed:`, err);
         }
+      }
+
+      batchHtmlState.isRunning = false;
+
+      if (isBatchHtmlCancelled) {
+        chrome.runtime.sendMessage({
+          type: 'BATCH_SAVE_HTML_CANCELLED',
+          total: tabIds.length,
+          saved: successCount
+        }).catch(() => {});
+
+        try {
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (activeTab && activeTab.id) {
+            showWebToast(activeTab.id, `⏹️ HTML 일괄 저장이 중지되었습니다. (${successCount}/${tabIds.length}개 완료)`);
+          }
+        } catch (e) {}
+
+        sendResponse({ success: false, cancelled: true, total: tabIds.length, saved: successCount });
+        return;
       }
 
       // Broadcast all tabs complete
@@ -1823,6 +1937,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       sendResponse({ success: true, total: tabIds.length, saved: successCount });
     })();
+    return true;
+  }
+
+  // Cancel Batch HTML Handler
+  if (message.type === 'CANCEL_BATCH_HTML') {
+    isBatchHtmlCancelled = true;
+    batchHtmlState.isRunning = false;
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // Query Batch HTML Status Handler
+  if (message.type === 'GET_BATCH_HTML_STATUS') {
+    sendResponse(batchHtmlState);
     return true;
   }
 

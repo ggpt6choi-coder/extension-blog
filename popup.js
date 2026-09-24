@@ -9,17 +9,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   const batchWebCount = document.getElementById('batch-web-count');
   const batchBtn = document.getElementById('batch-btn');
   const batchSpinner = document.getElementById('batch-spinner');
+  const batchBtnText = document.getElementById('batch-btn-text');
+  const batchTxtStopBtn = document.getElementById('batch-txt-stop-btn');
   const batchHtmlBtn = document.getElementById('batch-html-btn');
   const batchHtmlSpinner = document.getElementById('batch-html-spinner');
   const batchHtmlBtnText = document.getElementById('batch-html-btn-text');
+  const batchHtmlStopBtn = document.getElementById('batch-html-stop-btn');
   
   const htmlSaveBtn = document.getElementById('html-save-btn');
   const htmlSaveSpinner = document.getElementById('html-save-spinner');
   const pdfSaveBtn = document.getElementById('pdf-save-btn');
   const pdfSaveSpinner = document.getElementById('pdf-save-spinner');
   const pdfSaveBtnText = document.getElementById('pdf-save-btn-text');
+  const pdfStopBtn = document.getElementById('pdf-stop-btn');
   const pdfBatchCheckbox = document.getElementById('pdf-batch-checkbox');
   const pdfBatchTabCount = document.getElementById('pdf-batch-tab-count');
+
+  const screenshotStopBtn = document.getElementById('screenshot-stop-btn');
+  const screenshotBtnText = document.getElementById('screenshot-btn-text');
 
   const imageCount = document.getElementById('image-count');
   const imageDownloadBtn = document.getElementById('image-download-btn');
@@ -349,6 +356,36 @@ document.addEventListener('DOMContentLoaded', async () => {
       batchHtmlBtn.disabled = validWebTabs.length === 0;
     }
 
+    // Check if background batch tasks are currently running
+    try {
+      const pdfStatus = await chrome.runtime.sendMessage({ type: 'GET_BATCH_PDF_STATUS' });
+      if (pdfStatus && pdfStatus.isRunning) {
+        if (copyBtn) copyBtn.style.display = 'none';
+        if (pdfStopBtn) {
+          pdfStopBtn.style.display = 'inline-flex';
+          pdfStopBtn.disabled = false;
+        }
+        if (pdfSaveBtn) pdfSaveBtn.disabled = true;
+        if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'inline-block';
+        if (pdfSaveBtnText) {
+          pdfSaveBtnText.textContent = `[${pdfStatus.current}/${pdfStatus.total}] 저장 중`;
+        }
+      }
+
+      const htmlStatus = await chrome.runtime.sendMessage({ type: 'GET_BATCH_HTML_STATUS' });
+      if (htmlStatus && htmlStatus.isRunning) {
+        if (batchHtmlStopBtn) {
+          batchHtmlStopBtn.style.display = 'inline-flex';
+          batchHtmlStopBtn.disabled = false;
+        }
+        if (batchHtmlBtn) batchHtmlBtn.disabled = true;
+        if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'inline-block';
+        if (batchHtmlBtnText) {
+          batchHtmlBtnText.textContent = `[${htmlStatus.current}/${htmlStatus.total}] 저장 중`;
+        }
+      }
+    } catch (e) {}
+
     // 3. Count open Naver Cafe tabs for Cafe Mode
     const cafeTabs = await chrome.tabs.query({
       url: ["*://cafe.naver.com/*"],
@@ -580,20 +617,38 @@ ${cleanedText}
   });
 
   // Listen for background progress updates
+  // Listen for background progress updates
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'BATCH_SAVE_HTML_PROGRESS') {
       if (batchHtmlBtnText) {
         batchHtmlBtnText.textContent = `[${msg.current}/${msg.total}] ${msg.status === 'downloaded' ? '완료' : '저장 중'}`;
       }
+      if (batchHtmlStopBtn) {
+        batchHtmlStopBtn.style.display = 'inline-flex';
+        batchHtmlStopBtn.disabled = false;
+        batchHtmlStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+      }
+      if (batchHtmlBtn) batchHtmlBtn.disabled = true;
+      if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'inline-block';
+
       if (msg.status === 'downloaded') {
         showToast(`💾 [${msg.current}/${msg.total}] 다운로드 완료: ${msg.title}`);
       } else {
         showToast(`⏳ [${msg.current}/${msg.total}] 수집 중: ${msg.title}`);
       }
+    } else if (msg.type === 'BATCH_SAVE_HTML_CANCELLED') {
+      if (batchHtmlBtnText) {
+        batchHtmlBtnText.textContent = 'HTML 일괄 저장';
+      }
+      if (batchHtmlStopBtn) batchHtmlStopBtn.style.display = 'none';
+      if (batchHtmlBtn) batchHtmlBtn.disabled = false;
+      if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'none';
+      showToast(`⏹️ HTML 일괄 저장이 중지되었습니다. (${msg.saved}/${msg.total}개 완료)`);
     } else if (msg.type === 'BATCH_SAVE_HTML_COMPLETE') {
       if (batchHtmlBtnText) {
         batchHtmlBtnText.textContent = 'HTML 일괄 저장';
       }
+      if (batchHtmlStopBtn) batchHtmlStopBtn.style.display = 'none';
       if (batchHtmlBtn) batchHtmlBtn.disabled = false;
       if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'none';
       showToast(`🎉 총 ${msg.saved}개 탭 파일 다운로드 완료!`);
@@ -604,21 +659,56 @@ ${cleanedText}
       if (pdfSaveBtnText) {
         pdfSaveBtnText.textContent = `[${msg.current}/${msg.total}] ${msg.status === 'downloaded' ? '완료' : '저장 중'}`;
       }
+      if (copyBtn) copyBtn.style.display = 'none';
+      if (pdfStopBtn) {
+        pdfStopBtn.style.display = 'inline-flex';
+        pdfStopBtn.disabled = false;
+        pdfStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+      }
+      if (pdfSaveBtn) pdfSaveBtn.disabled = true;
+      if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'inline-block';
+
       if (msg.status === 'downloaded') {
         showToast(`📄 [${msg.current}/${msg.total}] PDF 저장 완료: ${msg.title}`);
       } else {
         showToast(`⏳ [${msg.current}/${msg.total}] PDF 생성 중: ${msg.title}`);
       }
+    } else if (msg.type === 'BATCH_SAVE_PDF_CANCELLED') {
+      if (pdfSaveBtnText) {
+        const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
+        pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
+      }
+      if (pdfStopBtn) pdfStopBtn.style.display = 'none';
+      if (copyBtn) copyBtn.style.display = 'inline-flex';
+      if (pdfSaveBtn) pdfSaveBtn.disabled = false;
+      if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
+      showToast(`⏹️ PDF 일괄 저장이 중지되었습니다. (${msg.saved}/${msg.total}개 완료)`);
     } else if (msg.type === 'BATCH_SAVE_PDF_COMPLETE') {
       if (pdfSaveBtnText) {
         const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
         pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
       }
+      if (pdfStopBtn) pdfStopBtn.style.display = 'none';
+      if (copyBtn) copyBtn.style.display = 'inline-flex';
       if (pdfSaveBtn) pdfSaveBtn.disabled = false;
       if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
       showToast(`🎉 총 ${msg.saved}개 탭 PDF 저장 완료!`);
     }
   });
+
+  // Batch HTML Stop Button Click Handler
+  if (batchHtmlStopBtn) {
+    batchHtmlStopBtn.addEventListener('click', async () => {
+      batchHtmlStopBtn.disabled = true;
+      batchHtmlStopBtn.innerHTML = '<span>중지 중...</span>';
+      showToast('⏹️ HTML 일괄 저장 중지 요청 중...');
+      try {
+        await chrome.runtime.sendMessage({ type: 'CANCEL_BATCH_HTML' });
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  }
 
   // Batch HTML (SingleFile) Download Event Handler
   if (batchHtmlBtn) {
@@ -634,6 +724,11 @@ ${cleanedText}
 
         batchHtmlBtn.disabled = true;
         batchHtmlSpinner.style.display = 'inline-block';
+        if (batchHtmlStopBtn) {
+          batchHtmlStopBtn.style.display = 'inline-flex';
+          batchHtmlStopBtn.disabled = false;
+          batchHtmlStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+        }
         if (batchHtmlBtnText) {
           batchHtmlBtnText.textContent = `[0/${validWebTabs.length}] 시작...`;
         }
@@ -644,7 +739,9 @@ ${cleanedText}
           tabIds: validWebTabs.map(t => t.id)
         });
 
-        if (resp && resp.success) {
+        if (resp && resp.cancelled) {
+          showToast(`⏹️ 총 ${resp.saved}개 저장 후 일괄 저장이 중지되었습니다.`);
+        } else if (resp && resp.success) {
           showToast(`🎉 총 ${resp.saved}개 탭 저장 완료!`);
         } else {
           showToast('일괄 저장 처리 중 오류가 발생했습니다.', true);
@@ -653,6 +750,7 @@ ${cleanedText}
         console.error('Batch HTML save failed:', err);
         showToast('일괄 저장 중 오류가 발생했습니다.', true);
       } finally {
+        if (batchHtmlStopBtn) batchHtmlStopBtn.style.display = 'none';
         batchHtmlBtn.disabled = false;
         batchHtmlSpinner.style.display = 'none';
         if (batchHtmlBtnText) {
@@ -662,10 +760,27 @@ ${cleanedText}
     });
   }
 
+  // Batch Blog Txt Stop Flag and Handler
+  let isBatchTxtCancelled = false;
+  if (batchTxtStopBtn) {
+    batchTxtStopBtn.addEventListener('click', () => {
+      isBatchTxtCancelled = true;
+      batchTxtStopBtn.disabled = true;
+      batchTxtStopBtn.innerHTML = '<span>중지 중...</span>';
+      showToast('⏹️ 블로그 일괄 추출 중지 중...');
+    });
+  }
+
   // Batch Export & Download Event Handler
   batchBtn.addEventListener('click', async () => {
+    isBatchTxtCancelled = false;
     batchBtn.disabled = true;
     batchSpinner.style.display = 'inline-block';
+    if (batchTxtStopBtn) {
+      batchTxtStopBtn.style.display = 'inline-flex';
+      batchTxtStopBtn.disabled = false;
+      batchTxtStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+    }
     
     try {
       const naverTabs = await chrome.tabs.query({
@@ -679,6 +794,10 @@ ${cleanedText}
       
       const results = [];
       for (const tab of naverTabs) {
+        if (isBatchTxtCancelled) {
+          break;
+        }
+
         try {
           const parsedUrl = new URL(tab.url);
           if (parsedUrl.hostname === 'm.blog.naver.com') {
@@ -721,6 +840,11 @@ ${cleanedText}
         }
       }
       
+      if (isBatchTxtCancelled) {
+        showToast(`⏹️ 블로그 일괄 추출이 중지되었습니다. (${results.length}개 완료)`);
+        if (results.length === 0) return;
+      }
+
       if (results.length === 0) {
         showToast('추출 성공한 본문이 없습니다.', true);
         return;
@@ -755,6 +879,7 @@ ${cleanedText}
       console.error('Batch export failed:', err);
       showToast('일괄 다운로드 중 오류가 발생했습니다.', true);
     } finally {
+      if (batchTxtStopBtn) batchTxtStopBtn.style.display = 'none';
       batchBtn.disabled = false;
       batchSpinner.style.display = 'none';
     }
@@ -796,9 +921,25 @@ ${cleanedText}
       console.error(e);
     }
 
+    let isScreenshotCancelled = false;
+    if (screenshotStopBtn) {
+      screenshotStopBtn.addEventListener('click', () => {
+        isScreenshotCancelled = true;
+        screenshotStopBtn.disabled = true;
+        screenshotStopBtn.innerHTML = '<span>중지 중...</span>';
+        showToast('⏹️ 캡처 중지 중...');
+      });
+    }
+
     screenshotBtn.addEventListener('click', async () => {
+      isScreenshotCancelled = false;
       screenshotBtn.disabled = true;
       screenshotSpinner.style.display = 'inline-block';
+      if (screenshotStopBtn) {
+        screenshotStopBtn.style.display = 'inline-flex';
+        screenshotStopBtn.disabled = false;
+        screenshotStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+      }
       
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1005,6 +1146,10 @@ ${cleanedText}
           const dataUrl = await safeCaptureVisibleTab(null, { format: 'png' });
           captures.push(dataUrl);
 
+          if (isScreenshotCancelled) {
+            break;
+          }
+
           // Break if we've reached the bottom
           if (scrollY >= totalHeight - viewportHeight) {
             break;
@@ -1035,6 +1180,11 @@ ${cleanedText}
             window.scrollTo(ox, oy);
           }
         });
+
+        if (isScreenshotCancelled) {
+          showToast('⏹️ 전체 캡처가 중지되었습니다.');
+          return;
+        }
 
         // 5. Stitch images together on canvas
         showToast('🧩 이미지 조각 병합 중...');
@@ -1146,6 +1296,7 @@ ${cleanedText}
         console.error('Screenshot failed:', err);
         showToast(`캡처 중 오류가 발생했습니다: ${err.message || err}`, true);
       } finally {
+        if (screenshotStopBtn) screenshotStopBtn.style.display = 'none';
         screenshotBtn.disabled = false;
         screenshotSpinner.style.display = 'none';
       }
@@ -1434,6 +1585,20 @@ ${cleanedText}
     });
   }
 
+  // PDF Stop Button Click Handler
+  if (pdfStopBtn) {
+    pdfStopBtn.addEventListener('click', async () => {
+      pdfStopBtn.disabled = true;
+      pdfStopBtn.innerHTML = '<span>중지 중...</span>';
+      showToast('⏹️ PDF 일괄 저장 중지 요청 중...');
+      try {
+        await chrome.runtime.sendMessage({ type: 'CANCEL_BATCH_PDF' });
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  }
+
   // PDF Download Event Handler (with auto mobile conversion & batch checkbox support)
   if (pdfSaveBtn) {
     pdfSaveBtn.addEventListener('click', async () => {
@@ -1449,6 +1614,12 @@ ${cleanedText}
 
           pdfSaveBtn.disabled = true;
           pdfSaveSpinner.style.display = 'inline-block';
+          if (copyBtn) copyBtn.style.display = 'none';
+          if (pdfStopBtn) {
+            pdfStopBtn.style.display = 'inline-flex';
+            pdfStopBtn.disabled = false;
+            pdfStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+          }
           if (pdfSaveBtnText) {
             pdfSaveBtnText.textContent = `[0/${validTabs.length}] 시작...`;
           }
@@ -1459,7 +1630,9 @@ ${cleanedText}
             tabIds: validTabs.map(t => t.id)
           });
 
-          if (resp && resp.success) {
+          if (resp && resp.cancelled) {
+            showToast(`⏹️ 총 ${resp.saved}개 저장 후 일괄 저장이 중지되었습니다.`);
+          } else if (resp && resp.success) {
             showToast(`🎉 총 ${resp.saved}개 탭 PDF 저장 완료!`);
           } else {
             showToast('일괄 저장 처리 중 오류가 발생했습니다.', true);
@@ -1468,6 +1641,8 @@ ${cleanedText}
           console.error('Batch PDF save failed:', err);
           showToast('일괄 저장 처리 중 오류가 발생했습니다.', true);
         } finally {
+          if (pdfStopBtn) pdfStopBtn.style.display = 'none';
+          if (copyBtn) copyBtn.style.display = 'inline-flex';
           pdfSaveBtn.disabled = false;
           pdfSaveSpinner.style.display = 'none';
           if (pdfSaveBtnText) {
