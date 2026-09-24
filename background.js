@@ -933,8 +933,56 @@ ${cleanedText}
       }
 
       showWebToast(tab.id, '📸 전체 스크롤 캡처 시작 (잠시 대기)...');
+
+      // 1. Pre-capture preparation: Auto-unfold collapsed detail descriptions & upgrade images to HD
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          // Auto expand Naver SmartStore / Shopping / Blog detail more buttons
+          try {
+            const moreBtns = document.querySelectorAll('button[class*="more" i], a[class*="more" i], [class*="detail_more" i], [class*="btn_more" i], [class*="fold" i], [class*="expand" i]');
+            moreBtns.forEach(btn => {
+              const txt = btn.innerText || btn.textContent || '';
+              if (txt.includes('펼쳐보기') || txt.includes('더보기') || txt.includes('상세정보 펼치기') || txt.includes('상세 설명')) {
+                btn.click();
+              }
+            });
+          } catch (e) {}
+
+          // Remove artificial max-height limits on detail containers if any
+          try {
+            const detailContainers = document.querySelectorAll('[class*="detail_view" i], [class*="product_detail" i], [class*="se_content" i]');
+            detailContainers.forEach(container => {
+              if (container.style.maxHeight) container.style.maxHeight = 'none';
+            });
+          } catch (e) {}
+
+          // Upgrade all images to full HD source
+          const imgs = Array.from(document.querySelectorAll('img'));
+          imgs.forEach(img => {
+            img.loading = 'eager';
+            let realSrc = img.getAttribute('data-lazy-src') || 
+                          img.getAttribute('data-src') || 
+                          img.getAttribute('data-original') || 
+                          img.getAttribute('data-actual-src') || 
+                          img.getAttribute('lazy-src') || 
+                          img.getAttribute('_src') ||
+                          img.src;
+            if (realSrc) {
+              if (realSrc.includes('w80_blur')) realSrc = realSrc.replace('w80_blur', 'w966');
+              else if (realSrc.includes('_blur')) realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
+              if (realSrc.includes('type=w400')) realSrc = realSrc.replace('type=w400', 'type=w966');
+              if (realSrc.includes('type=w640')) realSrc = realSrc.replace('type=w640', 'type=w966');
+              if (img.src !== realSrc) img.src = realSrc;
+            }
+          });
+        }
+      });
+
+      // Wait 400ms for DOM expansion and layout reflow
+      await new Promise(resolve => setTimeout(resolve, 400));
       
-      // 1. Get dimension parameters from active tab
+      // 2. Get dimension parameters from active tab after unfolding
       const [dimensionsResult] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
@@ -986,7 +1034,7 @@ ${cleanedText}
         }
       };
 
-      // 2. Loop scroll & capture
+      // 3. Loop scroll & capture
       while (currentY < totalHeight) {
         const scrollY = Math.min(currentY, totalHeight - viewportHeight);
         scrollPositions.push(scrollY);
@@ -998,18 +1046,71 @@ ${cleanedText}
           func: (y) => { window.scrollTo(0, y); }
         });
         
-        // 초기 렌더 대기
-        await new Promise(resolve => setTimeout(resolve, 400));
+        // For scrolled slices (scrollY > 0), temporarily hide fixed floating elements & neutralize sticky headers
+        // to prevent duplicate banners, floating carts, and text being covered up
+        if (scrollY > 0) {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              // Fixed elements (floating bars, buttons, sticky navs)
+              const fixedEls = [...document.querySelectorAll('*')].filter(el => {
+                try {
+                  const style = window.getComputedStyle(el);
+                  return style.position === 'fixed';
+                } catch (e) { return false; }
+              });
+              fixedEls.forEach(el => {
+                if (el.dataset.prevVisibility === undefined) {
+                  el.dataset.prevVisibility = el.style.visibility || 'visible';
+                }
+                el.style.visibility = 'hidden';
+              });
+
+              // Sticky elements: change to static so they don't stick to the top and obscure content
+              const stickyEls = [...document.querySelectorAll('*')].filter(el => {
+                try {
+                  const style = window.getComputedStyle(el);
+                  return style.position === 'sticky';
+                } catch (e) { return false; }
+              });
+              stickyEls.forEach(el => {
+                if (el.dataset.prevPosition === undefined) {
+                  el.dataset.prevPosition = el.style.position || 'sticky';
+                }
+                el.style.position = 'static';
+              });
+            }
+          });
+        }
         
-        // 현재 뷰포트 내 lazy-load 이미지가 모두 로드될 때까지 대기 (최대 2.5초)
+        // Trigger eager load and wait for images in current viewport to fully complete loading
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: () => new Promise((resolve) => {
-            const maxWait = setTimeout(resolve, 2500);
+            const maxWait = setTimeout(resolve, 2000);
             const imgs = [...document.querySelectorAll('img')].filter(img => {
               const r = img.getBoundingClientRect();
-              return r.top < window.innerHeight && r.bottom > 0 && r.width > 0;
+              return r.top < window.innerHeight + 100 && r.bottom > -100 && r.width > 0;
             });
+
+            imgs.forEach(img => {
+              img.loading = 'eager';
+              let realSrc = img.getAttribute('data-lazy-src') || 
+                            img.getAttribute('data-src') || 
+                            img.getAttribute('data-original') || 
+                            img.getAttribute('data-actual-src') || 
+                            img.getAttribute('lazy-src') || 
+                            img.getAttribute('_src') ||
+                            img.src;
+              if (realSrc) {
+                if (realSrc.includes('w80_blur')) realSrc = realSrc.replace('w80_blur', 'w966');
+                else if (realSrc.includes('_blur')) realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
+                if (realSrc.includes('type=w400')) realSrc = realSrc.replace('type=w400', 'type=w966');
+                if (realSrc.includes('type=w640')) realSrc = realSrc.replace('type=w640', 'type=w966');
+                if (img.src !== realSrc) img.src = realSrc;
+              }
+            });
+
             if (!imgs.length) { clearTimeout(maxWait); resolve(); return; }
             let count = 0;
             const done = () => { if (++count >= imgs.length) { clearTimeout(maxWait); resolve(); } };
@@ -1022,6 +1123,8 @@ ${cleanedText}
             });
           })
         });
+
+        await new Promise(r => setTimeout(r, 250));
         
         // Capture screenshot of visible tab viewport
         const dataUrl = await safeCaptureVisibleTab(null, { format: 'png' });
@@ -1033,23 +1136,37 @@ ${cleanedText}
         currentY += viewportHeight;
       }
       
-      // 3. Restore scrollbar and position
+      // 4. Restore scrollbar, fixed/sticky element styles, and position
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         args: [dim.originalX, dim.originalY],
         func: (ox, oy) => {
           document.body.style.overflow = '';
+
+          // Restore hidden fixed & sticky elements
+          const allModified = document.querySelectorAll('[data-prev-visibility], [data-prev-position]');
+          allModified.forEach(el => {
+            if (el.dataset.prevVisibility !== undefined) {
+              el.style.visibility = el.dataset.prevVisibility === 'visible' ? '' : el.dataset.prevVisibility;
+              delete el.dataset.prevVisibility;
+            }
+            if (el.dataset.prevPosition !== undefined) {
+              el.style.position = el.dataset.prevPosition === 'sticky' ? '' : el.dataset.prevPosition;
+              delete el.dataset.prevPosition;
+            }
+          });
+
           window.scrollTo(ox, oy);
         }
       });
       
-      // 4. Inject canvas stitching & download execution into the active tab's page context
+      // 5. Inject canvas stitching & download execution into the active tab's page context
       showWebToast(tab.id, '🧩 이미지 조각 병합 및 저장 중...');
       
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        args: [captures, scrollPositions, viewportWidth, totalHeight, pixelRatio, tab.title],
-        func: async (imgs, positions, w, h, ratio, rawTitle) => {
+        args: [captures, scrollPositions, viewportWidth, viewportHeight, totalHeight, pixelRatio, tab.title],
+        func: async (imgs, positions, w, vh, h, ratio, rawTitle) => {
           // Preload all images to get exact physical dimensions
           const loadedImages = await Promise.all(
             imgs.map((dataUrl) => new Promise((resolve, reject) => {
@@ -1063,9 +1180,21 @@ ${cleanedText}
           if (loadedImages.length === 0) return;
 
           const firstImg = loadedImages[0];
-          // Calculate exact scale from the first captured image to prevent any sub-pixel blur
-          const actualScale = firstImg.naturalWidth / w;
-          const finalWidth = firstImg.naturalWidth;
+          const nativeDpr = firstImg.naturalWidth / w;
+
+          // Canvas safe limits (max dimension 65,000px, max pixel buffer 250M pixels)
+          const maxSafeHeight = 65000;
+          const maxSafePixels = 250000000;
+
+          let actualScale = nativeDpr;
+          if (h * actualScale > maxSafeHeight) {
+            actualScale = Math.min(actualScale, maxSafeHeight / h);
+          }
+          if (w * actualScale * h * actualScale > maxSafePixels) {
+            actualScale = Math.min(actualScale, Math.sqrt(maxSafePixels / (w * h)));
+          }
+
+          const finalWidth = Math.round(w * actualScale);
           const finalHeight = Math.round(h * actualScale);
 
           const canvas = document.createElement('canvas');
@@ -1073,32 +1202,37 @@ ${cleanedText}
           canvas.height = finalHeight;
           const ctx = canvas.getContext('2d', { alpha: false });
 
-          // Maintain 1:1 crisp pixel sharpness (prevent blurring interpolation)
-          ctx.imageSmoothingEnabled = false;
+          // Maintain crisp sharpness with high-quality smoothing
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
 
-          // Draw each capture piece onto the canvas with exact integer coordinates
-          // 마지막 조각을 제외한 각 조각은 다음 스크롤 위치까지만 클리핑하여
-          // 겹침(overlap)으로 인한 빈 공간/검정 영역 방지
+          // Draw each capture piece onto the canvas with exact integer coordinates & slice clipping
           for (let i = 0; i < loadedImages.length; i++) {
             const img = loadedImages[i];
             const scrollY = positions[i];
             const drawY = Math.round(scrollY * actualScale);
+            const capScaleY = img.naturalHeight / vh;
 
             if (i < loadedImages.length - 1) {
-              // 비-마지막 조각: 다음 스크롤 위치까지만 그려 겹침 제거
               const nextScrollY = positions[i + 1];
-              const clipH = Math.round((nextScrollY - scrollY) * actualScale);
+              const sliceHeightCss = nextScrollY - scrollY;
+              const srcClipH = Math.round(sliceHeightCss * capScaleY);
+              const destH = Math.round(sliceHeightCss * actualScale);
+
               ctx.drawImage(
                 img,
-                0, 0, img.naturalWidth, clipH,
-                0, drawY, img.naturalWidth, clipH
+                0, 0, img.naturalWidth, srcClipH,
+                0, drawY, finalWidth, destH
               );
             } else {
-              // 마지막 조각: 나머지 전체 영역을 그대로 그림
+              const remainingCss = h - scrollY;
+              const srcClipH = Math.round(remainingCss * capScaleY);
+              const destH = Math.round(remainingCss * actualScale);
+
               ctx.drawImage(
                 img,
-                0, 0, img.naturalWidth, img.naturalHeight,
-                0, drawY, img.naturalWidth, img.naturalHeight
+                0, 0, img.naturalWidth, srcClipH,
+                0, drawY, finalWidth, destH
               );
             }
           }

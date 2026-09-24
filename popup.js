@@ -822,7 +822,55 @@ ${cleanedText}
 
         showToast('📸 전체 스크롤 캡처 시작 (잠시 대기)...');
 
-        // 1. Get page dimensions and current scroll positions
+        // 1. Pre-capture preparation: Auto-unfold collapsed detail descriptions & upgrade images to HD
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            // Auto expand Naver SmartStore / Shopping / Blog detail more buttons
+            try {
+              const moreBtns = document.querySelectorAll('button[class*="more" i], a[class*="more" i], [class*="detail_more" i], [class*="btn_more" i], [class*="fold" i], [class*="expand" i]');
+              moreBtns.forEach(btn => {
+                const txt = btn.innerText || btn.textContent || '';
+                if (txt.includes('펼쳐보기') || txt.includes('더보기') || txt.includes('상세정보 펼치기') || txt.includes('상세 설명')) {
+                  btn.click();
+                }
+              });
+            } catch (e) {}
+
+            // Remove artificial max-height limits on detail containers if any
+            try {
+              const detailContainers = document.querySelectorAll('[class*="detail_view" i], [class*="product_detail" i], [class*="se_content" i]');
+              detailContainers.forEach(container => {
+                if (container.style.maxHeight) container.style.maxHeight = 'none';
+              });
+            } catch (e) {}
+
+            // Upgrade all images to full HD source
+            const imgs = Array.from(document.querySelectorAll('img'));
+            imgs.forEach(img => {
+              img.loading = 'eager';
+              let realSrc = img.getAttribute('data-lazy-src') || 
+                            img.getAttribute('data-src') || 
+                            img.getAttribute('data-original') || 
+                            img.getAttribute('data-actual-src') || 
+                            img.getAttribute('lazy-src') || 
+                            img.getAttribute('_src') ||
+                            img.src;
+              if (realSrc) {
+                if (realSrc.includes('w80_blur')) realSrc = realSrc.replace('w80_blur', 'w966');
+                else if (realSrc.includes('_blur')) realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
+                if (realSrc.includes('type=w400')) realSrc = realSrc.replace('type=w400', 'type=w966');
+                if (realSrc.includes('type=w640')) realSrc = realSrc.replace('type=w640', 'type=w966');
+                if (img.src !== realSrc) img.src = realSrc;
+              }
+            });
+          }
+        });
+
+        // Wait 400ms for DOM expansion and layout reflow
+        await sleep(400);
+
+        // 2. Measure page dimensions after unfolding
         const [dimensionsResult] = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: () => {
@@ -847,11 +895,7 @@ ${cleanedText}
         const viewportWidth = dim.clientWidth;
         const pixelRatio = dim.devicePixelRatio;
 
-        const captures = [];
-        const scrollPositions = [];
-        let currentY = 0;
-
-        // Hide scrollbar temporarily to make clean screenshot
+        // Hide scrollbar temporarily
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: () => {
@@ -859,9 +903,12 @@ ${cleanedText}
           }
         });
 
-        // 2. Loop scroll & capture
+        const captures = [];
+        const scrollPositions = [];
+        let currentY = 0;
+
+        // 3. Loop scroll & capture
         while (currentY < totalHeight) {
-          // Adjust scroll position (cannot scroll past scrollHeight - clientHeight)
           const scrollY = Math.min(currentY, totalHeight - viewportHeight);
           scrollPositions.push(scrollY);
 
@@ -874,8 +921,85 @@ ${cleanedText}
             }
           });
 
-          // Wait for rendering and lazy load images (>=600ms to stay within Chrome capture quota)
-          await sleep(600);
+          // For scrolled slices (scrollY > 0), temporarily hide fixed floating elements & neutralize sticky headers
+          // to prevent duplicate banners, floating carts, and text being covered up
+          if (scrollY > 0) {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: () => {
+                // Fixed elements (floating bars, buttons, sticky navs)
+                const fixedEls = [...document.querySelectorAll('*')].filter(el => {
+                  try {
+                    const style = window.getComputedStyle(el);
+                    return style.position === 'fixed';
+                  } catch (e) { return false; }
+                });
+                fixedEls.forEach(el => {
+                  if (el.dataset.prevVisibility === undefined) {
+                    el.dataset.prevVisibility = el.style.visibility || 'visible';
+                  }
+                  el.style.visibility = 'hidden';
+                });
+
+                // Sticky elements: change to static so they don't stick to the top and obscure content
+                const stickyEls = [...document.querySelectorAll('*')].filter(el => {
+                  try {
+                    const style = window.getComputedStyle(el);
+                    return style.position === 'sticky';
+                  } catch (e) { return false; }
+                });
+                stickyEls.forEach(el => {
+                  if (el.dataset.prevPosition === undefined) {
+                    el.dataset.prevPosition = el.style.position || 'sticky';
+                  }
+                  el.style.position = 'static';
+                });
+              }
+            });
+          }
+
+          // Trigger eager load and wait for images in current viewport to fully complete loading
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => new Promise((resolve) => {
+              const maxWait = setTimeout(resolve, 2000);
+              const imgs = [...document.querySelectorAll('img')].filter(img => {
+                const r = img.getBoundingClientRect();
+                return r.top < window.innerHeight + 100 && r.bottom > -100 && r.width > 0;
+              });
+
+              imgs.forEach(img => {
+                img.loading = 'eager';
+                let realSrc = img.getAttribute('data-lazy-src') || 
+                              img.getAttribute('data-src') || 
+                              img.getAttribute('data-original') || 
+                              img.getAttribute('data-actual-src') || 
+                              img.getAttribute('lazy-src') || 
+                              img.getAttribute('_src') ||
+                              img.src;
+                if (realSrc) {
+                  if (realSrc.includes('w80_blur')) realSrc = realSrc.replace('w80_blur', 'w966');
+                  else if (realSrc.includes('_blur')) realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
+                  if (realSrc.includes('type=w400')) realSrc = realSrc.replace('type=w400', 'type=w966');
+                  if (realSrc.includes('type=w640')) realSrc = realSrc.replace('type=w640', 'type=w966');
+                  if (img.src !== realSrc) img.src = realSrc;
+                }
+              });
+
+              if (!imgs.length) { clearTimeout(maxWait); resolve(); return; }
+              let count = 0;
+              const done = () => { if (++count >= imgs.length) { clearTimeout(maxWait); resolve(); } };
+              imgs.forEach(img => {
+                if (img.complete && img.naturalWidth > 0) done();
+                else {
+                  img.addEventListener('load', done, { once: true });
+                  img.addEventListener('error', done, { once: true });
+                }
+              });
+            })
+          });
+
+          await sleep(250);
 
           // Capture visible tab safely with quota backoff retry
           const dataUrl = await safeCaptureVisibleTab(null, { format: 'png' });
@@ -888,17 +1012,31 @@ ${cleanedText}
           currentY += viewportHeight;
         }
 
-        // 3. Restore scrollbar and original position
+        // 4. Restore scrollbar, fixed/sticky element styles, and original position
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           args: [dim.originalX, dim.originalY],
           func: (ox, oy) => {
             document.body.style.overflow = '';
+            
+            // Restore hidden fixed & sticky elements
+            const allModified = document.querySelectorAll('[data-prev-visibility], [data-prev-position]');
+            allModified.forEach(el => {
+              if (el.dataset.prevVisibility !== undefined) {
+                el.style.visibility = el.dataset.prevVisibility === 'visible' ? '' : el.dataset.prevVisibility;
+                delete el.dataset.prevVisibility;
+              }
+              if (el.dataset.prevPosition !== undefined) {
+                el.style.position = el.dataset.prevPosition === 'sticky' ? '' : el.dataset.prevPosition;
+                delete el.dataset.prevPosition;
+              }
+            });
+
             window.scrollTo(ox, oy);
           }
         });
 
-        // 4. Stitch images together on canvas
+        // 5. Stitch images together on canvas
         showToast('🧩 이미지 조각 병합 중...');
 
         // Load all captured image parts to get exact physical dimensions
@@ -916,9 +1054,21 @@ ${cleanedText}
         }
 
         const firstImg = loadedImages[0];
-        // Calculate exact scale from the first captured image to prevent any sub-pixel blur
-        const actualScale = firstImg.naturalWidth / viewportWidth;
-        const finalWidth = firstImg.naturalWidth;
+        const nativeDpr = firstImg.naturalWidth / viewportWidth;
+
+        // Canvas safe limits (max dimension 65,000px, max pixel buffer 250M pixels)
+        const maxSafeHeight = 65000;
+        const maxSafePixels = 250000000;
+
+        let actualScale = nativeDpr;
+        if (totalHeight * actualScale > maxSafeHeight) {
+          actualScale = Math.min(actualScale, maxSafeHeight / totalHeight);
+        }
+        if (viewportWidth * actualScale * totalHeight * actualScale > maxSafePixels) {
+          actualScale = Math.min(actualScale, Math.sqrt(maxSafePixels / (viewportWidth * totalHeight)));
+        }
+
+        const finalWidth = Math.round(viewportWidth * actualScale);
         const finalHeight = Math.round(totalHeight * actualScale);
 
         const canvas = document.createElement('canvas');
@@ -926,20 +1076,41 @@ ${cleanedText}
         canvas.height = finalHeight;
         const ctx = canvas.getContext('2d', { alpha: false });
 
-        // Maintain 1:1 crisp pixel sharpness (prevent blurring interpolation)
-        ctx.imageSmoothingEnabled = false;
+        // Maintain crisp sharpness with high-quality smoothing
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
 
-        // Draw each screenshot piece onto canvas with exact integer coordinates
+        // Draw each screenshot piece onto canvas with exact integer coordinates & slice clipping
         for (let i = 0; i < loadedImages.length; i++) {
           const img = loadedImages[i];
           const scrollY = scrollPositions[i];
           const drawY = Math.round(scrollY * actualScale);
+          const capScaleY = img.naturalHeight / viewportHeight;
 
-          ctx.drawImage(
-            img,
-            0, 0, img.naturalWidth, img.naturalHeight,
-            0, drawY, img.naturalWidth, img.naturalHeight
-          );
+          if (i < loadedImages.length - 1) {
+            // Clip non-last slice to next scroll position to eliminate overlapping/ghosting
+            const nextScrollY = scrollPositions[i + 1];
+            const sliceHeightCss = nextScrollY - scrollY;
+            const srcClipH = Math.round(sliceHeightCss * capScaleY);
+            const destH = Math.round(sliceHeightCss * actualScale);
+
+            ctx.drawImage(
+              img,
+              0, 0, img.naturalWidth, srcClipH,
+              0, drawY, finalWidth, destH
+            );
+          } else {
+            // Last slice: draw the remaining portion to the bottom
+            const remainingCss = totalHeight - scrollY;
+            const srcClipH = Math.round(remainingCss * capScaleY);
+            const destH = Math.round(remainingCss * actualScale);
+
+            ctx.drawImage(
+              img,
+              0, 0, img.naturalWidth, srcClipH,
+              0, drawY, finalWidth, destH
+            );
+          }
         }
 
         // 5. Download the final image using high-quality Blob (avoids toDataURL memory/compression limits)
