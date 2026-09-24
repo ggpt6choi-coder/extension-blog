@@ -263,8 +263,77 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Helpers to apply active batch running states to UI
+  function applyPdfBatchRunningState(status) {
+    if (!status || !status.isRunning) return;
+    if (copyBtn) copyBtn.disabled = true;
+    if (pdfSaveBtn) pdfSaveBtn.disabled = true;
+    if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'inline-block';
+    if (pdfSaveBtnText) {
+      pdfSaveBtnText.textContent = `[${status.current}/${status.total}] 저장 중`;
+    }
+    if (pdfBatchCheckbox) pdfBatchCheckbox.checked = true;
+    if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'none';
+    if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'flex';
+    if (pdfBatchStatusText) {
+      const isDone = status.status === 'downloaded';
+      pdfBatchStatusText.textContent = `[${status.current}/${status.total}] ${isDone ? '저장 완료' : 'PDF 생성 중'}: ${status.title || ''}`;
+    }
+    if (pdfStopBtn) {
+      pdfStopBtn.style.display = 'inline-flex';
+      pdfStopBtn.disabled = false;
+      pdfStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+    }
+  }
+
+  function applyHtmlBatchRunningState(status) {
+    if (!status || !status.isRunning) return;
+    if (batchHtmlBtn) batchHtmlBtn.disabled = true;
+    if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'inline-block';
+    if (batchHtmlBtnText) {
+      batchHtmlBtnText.textContent = `[${status.current}/${status.total}] 저장 중`;
+    }
+    if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'flex';
+    if (batchTaskStatusText) {
+      const isDone = status.status === 'downloaded';
+      batchTaskStatusText.textContent = `[${status.current}/${status.total}] ${isDone ? '저장 완료' : 'HTML 수집 중'}: ${status.title || ''}`;
+    }
+    if (batchHtmlStopBtn) {
+      batchHtmlStopBtn.style.display = 'inline-flex';
+      batchHtmlStopBtn.disabled = false;
+      batchHtmlStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+    }
+    if (batchTxtStopBtn) batchTxtStopBtn.style.display = 'none';
+  }
+
   // Initialize
   try {
+    // 0. Immediate Fast-Path State Sync (0ms delay from local storage & background worker)
+    let isPdfRunning = false;
+    let isHtmlRunning = false;
+
+    try {
+      const [stored, pdfStatus, htmlStatus] = await Promise.all([
+        chrome.storage.local.get(['batchPdfState', 'batchHtmlState']).catch(() => ({})),
+        chrome.runtime.sendMessage({ type: 'GET_BATCH_PDF_STATUS' }).catch(() => null),
+        chrome.runtime.sendMessage({ type: 'GET_BATCH_HTML_STATUS' }).catch(() => null)
+      ]);
+
+      const activePdfState = (pdfStatus && pdfStatus.isRunning) ? pdfStatus : (stored?.batchPdfState?.isRunning ? stored.batchPdfState : null);
+      if (activePdfState) {
+        isPdfRunning = true;
+        applyPdfBatchRunningState(activePdfState);
+      }
+
+      const activeHtmlState = (htmlStatus && htmlStatus.isRunning) ? htmlStatus : (stored?.batchHtmlState?.isRunning ? stored.batchHtmlState : null);
+      if (activeHtmlState) {
+        isHtmlRunning = true;
+        applyHtmlBatchRunningState(activeHtmlState);
+      }
+    } catch (e) {
+      console.warn('Initial batch status sync failed:', e);
+    }
+
     // 1. Check active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTab = tab;
@@ -276,7 +345,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (isNaverBlogUrl(tab.url)) {
         activeStatusBadge.textContent = '추출 가능';
         activeStatusBadge.className = 'badge badge-success';
-        copyBtn.disabled = false;
+        if (!isPdfRunning) copyBtn.disabled = false;
       } else {
         activeStatusBadge.textContent = '추출 불가';
         activeStatusBadge.className = 'badge badge-error';
@@ -285,8 +354,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       // Enable HTML and PDF save buttons if it's not a chrome/system page
       if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://') && !tab.url.startsWith('about:')) {
-        if (htmlSaveBtn) htmlSaveBtn.disabled = false;
-        pdfSaveBtn.disabled = false;
+        if (!isHtmlRunning && htmlSaveBtn) htmlSaveBtn.disabled = false;
+        if (!isPdfRunning) pdfSaveBtn.disabled = false;
         
         // Count images on active tab
         let hasAccess = true;
@@ -360,48 +429,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (pdfBatchTabCount) {
       pdfBatchTabCount.textContent = `${validWebTabs.length}`;
     }
-    if (batchHtmlBtn) {
+    if (!isHtmlRunning && batchHtmlBtn) {
       batchHtmlBtn.disabled = validWebTabs.length === 0;
     }
-
-    // Check if background batch tasks are currently running
-    try {
-      const pdfStatus = await chrome.runtime.sendMessage({ type: 'GET_BATCH_PDF_STATUS' });
-      if (pdfStatus && pdfStatus.isRunning) {
-        if (copyBtn) copyBtn.disabled = true;
-        if (pdfSaveBtn) pdfSaveBtn.disabled = true;
-        if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'inline-block';
-        if (pdfSaveBtnText) {
-          pdfSaveBtnText.textContent = `[${pdfStatus.current}/${pdfStatus.total}] 저장 중`;
-        }
-        if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'flex';
-        if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'none';
-        if (pdfBatchStatusText) {
-          pdfBatchStatusText.textContent = `[${pdfStatus.current}/${pdfStatus.total}] PDF 저장 중...`;
-        }
-        if (pdfStopBtn) {
-          pdfStopBtn.style.display = 'inline-flex';
-          pdfStopBtn.disabled = false;
-        }
-      }
-
-      const htmlStatus = await chrome.runtime.sendMessage({ type: 'GET_BATCH_HTML_STATUS' });
-      if (htmlStatus && htmlStatus.isRunning) {
-        if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'flex';
-        if (batchTaskStatusText) {
-          batchTaskStatusText.textContent = `[${htmlStatus.current}/${htmlStatus.total}] HTML 저장 중...`;
-        }
-        if (batchHtmlStopBtn) {
-          batchHtmlStopBtn.style.display = 'inline-flex';
-          batchHtmlStopBtn.disabled = false;
-        }
-        if (batchHtmlBtn) batchHtmlBtn.disabled = true;
-        if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'inline-block';
-        if (batchHtmlBtnText) {
-          batchHtmlBtnText.textContent = `[${htmlStatus.current}/${htmlStatus.total}] 저장 중`;
-        }
-      }
-    } catch (e) {}
 
     // 3. Count open Naver Cafe tabs for Cafe Mode
     const cafeTabs = await chrome.tabs.query({

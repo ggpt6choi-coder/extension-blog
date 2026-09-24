@@ -1594,6 +1594,27 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
   }
 }
 
+// Global states for Batch PDF and Batch HTML processes
+let isBatchPdfCancelled = false;
+let batchPdfState = {
+  isRunning: false,
+  current: 0,
+  total: 0,
+  saved: 0,
+  title: '',
+  status: 'idle'
+};
+
+let isBatchHtmlCancelled = false;
+let batchHtmlState = {
+  isRunning: false,
+  current: 0,
+  total: 0,
+  saved: 0,
+  title: '',
+  status: 'idle'
+};
+
 // Runtime message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'START_AUTO_COMMENT') {
@@ -1626,15 +1647,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Global state for Batch PDF Cancellation
-  let isBatchPdfCancelled = false;
-  let batchPdfState = {
-    isRunning: false,
-    current: 0,
-    total: 0,
-    saved: 0
-  };
-
   // Batch Save PDF across multiple tabs (sequential processing with progress notifications & cancellation)
   if (message.type === 'BATCH_SAVE_PDF_TABS') {
     (async () => {
@@ -1645,8 +1657,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         isRunning: true,
         current: 0,
         total: tabIds.length,
-        saved: 0
+        saved: 0,
+        title: '',
+        status: 'processing'
       };
+      await chrome.storage.local.set({ batchPdfState }).catch(() => {});
 
       for (let i = 0; i < tabIds.length; i++) {
         if (isBatchPdfCancelled) {
@@ -1664,6 +1679,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         batchPdfState.current = i + 1;
+        batchPdfState.title = tab.title || '페이지';
+        batchPdfState.status = 'processing';
+        chrome.storage.local.set({ batchPdfState }).catch(() => {});
 
         // Broadcast start of current tab
         chrome.runtime.sendMessage({
@@ -1679,6 +1697,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (res && res.success) {
             successCount++;
             batchPdfState.saved = successCount;
+            batchPdfState.status = 'downloaded';
+            chrome.storage.local.set({ batchPdfState }).catch(() => {});
           }
         } catch (err) {
           console.error(`Batch PDF tab ${tabId} failed:`, err);
@@ -1707,6 +1727,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       batchPdfState.isRunning = false;
+      batchPdfState.status = isBatchPdfCancelled ? 'cancelled' : 'complete';
+      await chrome.storage.local.set({ batchPdfState }).catch(() => {});
 
       if (isBatchPdfCancelled) {
         chrome.runtime.sendMessage({
@@ -1750,6 +1772,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'CANCEL_BATCH_PDF') {
     isBatchPdfCancelled = true;
     batchPdfState.isRunning = false;
+    batchPdfState.status = 'cancelled';
+    chrome.storage.local.set({ batchPdfState }).catch(() => {});
     sendResponse({ success: true });
     return true;
   }
@@ -1805,15 +1829,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Global state for Batch HTML Cancellation
-  let isBatchHtmlCancelled = false;
-  let batchHtmlState = {
-    isRunning: false,
-    current: 0,
-    total: 0,
-    saved: 0
-  };
-
   // Batch Save HTML across multiple tabs (Instant per-tab download via chrome.downloads API with cancellation)
   if (message.type === 'BATCH_SAVE_HTML_TABS') {
     (async () => {
@@ -1824,8 +1839,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         isRunning: true,
         current: 0,
         total: tabIds.length,
-        saved: 0
+        saved: 0,
+        title: '',
+        status: 'processing'
       };
+      await chrome.storage.local.set({ batchHtmlState }).catch(() => {});
 
       for (let i = 0; i < tabIds.length; i++) {
         if (isBatchHtmlCancelled) {
@@ -1840,6 +1858,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } catch (e) {}
 
         batchHtmlState.current = i + 1;
+        batchHtmlState.title = tabTitle;
+        batchHtmlState.status = 'processing';
+        chrome.storage.local.set({ batchHtmlState }).catch(() => {});
 
         // Broadcast start of current tab
         chrome.runtime.sendMessage({
@@ -1885,6 +1906,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             successCount++;
             batchHtmlState.saved = successCount;
+            batchHtmlState.status = 'downloaded';
+            batchHtmlState.title = res.title || tabTitle;
+            chrome.storage.local.set({ batchHtmlState }).catch(() => {});
 
             // Broadcast download complete for this tab
             chrome.runtime.sendMessage({
@@ -1909,6 +1933,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       batchHtmlState.isRunning = false;
+      batchHtmlState.status = isBatchHtmlCancelled ? 'cancelled' : 'complete';
+      await chrome.storage.local.set({ batchHtmlState }).catch(() => {});
 
       if (isBatchHtmlCancelled) {
         chrome.runtime.sendMessage({
@@ -1944,6 +1970,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'CANCEL_BATCH_HTML') {
     isBatchHtmlCancelled = true;
     batchHtmlState.isRunning = false;
+    batchHtmlState.status = 'cancelled';
+    chrome.storage.local.set({ batchHtmlState }).catch(() => {});
     sendResponse({ success: true });
     return true;
   }
