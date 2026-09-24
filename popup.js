@@ -24,7 +24,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pdfStopBtn = document.getElementById('pdf-stop-btn');
   const pdfBatchCheckbox = document.getElementById('pdf-batch-checkbox');
   const pdfBatchTabCount = document.getElementById('pdf-batch-tab-count');
+  const pdfBatchProgressBar = document.getElementById('pdf-batch-progress-bar');
+  const pdfBatchStatusText = document.getElementById('pdf-batch-status-text');
+  const pdfBatchOptionRow = document.getElementById('pdf-batch-option-row');
 
+  const batchTaskProgressBar = document.getElementById('batch-task-progress-bar');
+  const batchTaskStatusText = document.getElementById('batch-task-status-text');
+
+  const screenshotProgressBar = document.getElementById('screenshot-progress-bar');
+  const screenshotStatusText = document.getElementById('screenshot-status-text');
   const screenshotStopBtn = document.getElementById('screenshot-stop-btn');
   const screenshotBtnText = document.getElementById('screenshot-btn-text');
 
@@ -360,20 +368,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const pdfStatus = await chrome.runtime.sendMessage({ type: 'GET_BATCH_PDF_STATUS' });
       if (pdfStatus && pdfStatus.isRunning) {
-        if (copyBtn) copyBtn.style.display = 'none';
-        if (pdfStopBtn) {
-          pdfStopBtn.style.display = 'inline-flex';
-          pdfStopBtn.disabled = false;
-        }
+        if (copyBtn) copyBtn.disabled = true;
         if (pdfSaveBtn) pdfSaveBtn.disabled = true;
         if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'inline-block';
         if (pdfSaveBtnText) {
           pdfSaveBtnText.textContent = `[${pdfStatus.current}/${pdfStatus.total}] 저장 중`;
         }
+        if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'flex';
+        if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'none';
+        if (pdfBatchStatusText) {
+          pdfBatchStatusText.textContent = `[${pdfStatus.current}/${pdfStatus.total}] PDF 저장 중...`;
+        }
+        if (pdfStopBtn) {
+          pdfStopBtn.style.display = 'inline-flex';
+          pdfStopBtn.disabled = false;
+        }
       }
 
       const htmlStatus = await chrome.runtime.sendMessage({ type: 'GET_BATCH_HTML_STATUS' });
       if (htmlStatus && htmlStatus.isRunning) {
+        if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'flex';
+        if (batchTaskStatusText) {
+          batchTaskStatusText.textContent = `[${htmlStatus.current}/${htmlStatus.total}] HTML 저장 중...`;
+        }
         if (batchHtmlStopBtn) {
           batchHtmlStopBtn.style.display = 'inline-flex';
           batchHtmlStopBtn.disabled = false;
@@ -617,17 +634,21 @@ ${cleanedText}
   });
 
   // Listen for background progress updates
-  // Listen for background progress updates
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'BATCH_SAVE_HTML_PROGRESS') {
       if (batchHtmlBtnText) {
         batchHtmlBtnText.textContent = `[${msg.current}/${msg.total}] ${msg.status === 'downloaded' ? '완료' : '저장 중'}`;
       }
+      if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'flex';
+      if (batchTaskStatusText) {
+        batchTaskStatusText.textContent = `[${msg.current}/${msg.total}] ${msg.status === 'downloaded' ? '저장 완료' : 'HTML 수집 중'}: ${msg.title || ''}`;
+      }
       if (batchHtmlStopBtn) {
         batchHtmlStopBtn.style.display = 'inline-flex';
         batchHtmlStopBtn.disabled = false;
-        batchHtmlStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+        batchHtmlStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
       }
+      if (batchTxtStopBtn) batchTxtStopBtn.style.display = 'none';
       if (batchHtmlBtn) batchHtmlBtn.disabled = true;
       if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'inline-block';
 
@@ -640,6 +661,7 @@ ${cleanedText}
       if (batchHtmlBtnText) {
         batchHtmlBtnText.textContent = 'HTML 일괄 저장';
       }
+      if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'none';
       if (batchHtmlStopBtn) batchHtmlStopBtn.style.display = 'none';
       if (batchHtmlBtn) batchHtmlBtn.disabled = false;
       if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'none';
@@ -648,6 +670,7 @@ ${cleanedText}
       if (batchHtmlBtnText) {
         batchHtmlBtnText.textContent = 'HTML 일괄 저장';
       }
+      if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'none';
       if (batchHtmlStopBtn) batchHtmlStopBtn.style.display = 'none';
       if (batchHtmlBtn) batchHtmlBtn.disabled = false;
       if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'none';
@@ -659,11 +682,16 @@ ${cleanedText}
       if (pdfSaveBtnText) {
         pdfSaveBtnText.textContent = `[${msg.current}/${msg.total}] ${msg.status === 'downloaded' ? '완료' : '저장 중'}`;
       }
-      if (copyBtn) copyBtn.style.display = 'none';
+      if (copyBtn) copyBtn.disabled = true;
+      if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'flex';
+      if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'none';
+      if (pdfBatchStatusText) {
+        pdfBatchStatusText.textContent = `[${msg.current}/${msg.total}] ${msg.status === 'downloaded' ? '저장 완료' : 'PDF 생성 중'}: ${msg.title || ''}`;
+      }
       if (pdfStopBtn) {
         pdfStopBtn.style.display = 'inline-flex';
         pdfStopBtn.disabled = false;
-        pdfStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+        pdfStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
       }
       if (pdfSaveBtn) pdfSaveBtn.disabled = true;
       if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'inline-block';
@@ -678,8 +706,10 @@ ${cleanedText}
         const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
         pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
       }
+      if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'none';
+      if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'flex';
       if (pdfStopBtn) pdfStopBtn.style.display = 'none';
-      if (copyBtn) copyBtn.style.display = 'inline-flex';
+      if (copyBtn) copyBtn.disabled = false;
       if (pdfSaveBtn) pdfSaveBtn.disabled = false;
       if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
       showToast(`⏹️ PDF 일괄 저장이 중지되었습니다. (${msg.saved}/${msg.total}개 완료)`);
@@ -688,8 +718,10 @@ ${cleanedText}
         const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
         pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
       }
+      if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'none';
+      if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'flex';
       if (pdfStopBtn) pdfStopBtn.style.display = 'none';
-      if (copyBtn) copyBtn.style.display = 'inline-flex';
+      if (copyBtn) copyBtn.disabled = false;
       if (pdfSaveBtn) pdfSaveBtn.disabled = false;
       if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
       showToast(`🎉 총 ${msg.saved}개 탭 PDF 저장 완료!`);
@@ -724,11 +756,16 @@ ${cleanedText}
 
         batchHtmlBtn.disabled = true;
         batchHtmlSpinner.style.display = 'inline-block';
+        if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'flex';
+        if (batchTaskStatusText) {
+          batchTaskStatusText.textContent = `[0/${validWebTabs.length}] 시작...`;
+        }
         if (batchHtmlStopBtn) {
           batchHtmlStopBtn.style.display = 'inline-flex';
           batchHtmlStopBtn.disabled = false;
-          batchHtmlStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+          batchHtmlStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
         }
+        if (batchTxtStopBtn) batchTxtStopBtn.style.display = 'none';
         if (batchHtmlBtnText) {
           batchHtmlBtnText.textContent = `[0/${validWebTabs.length}] 시작...`;
         }
@@ -750,6 +787,7 @@ ${cleanedText}
         console.error('Batch HTML save failed:', err);
         showToast('일괄 저장 중 오류가 발생했습니다.', true);
       } finally {
+        if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'none';
         if (batchHtmlStopBtn) batchHtmlStopBtn.style.display = 'none';
         batchHtmlBtn.disabled = false;
         batchHtmlSpinner.style.display = 'none';
@@ -776,11 +814,16 @@ ${cleanedText}
     isBatchTxtCancelled = false;
     batchBtn.disabled = true;
     batchSpinner.style.display = 'inline-block';
+    if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'flex';
+    if (batchTaskStatusText) {
+      batchTaskStatusText.textContent = '블로그 감지 및 수집 준비 중...';
+    }
     if (batchTxtStopBtn) {
       batchTxtStopBtn.style.display = 'inline-flex';
       batchTxtStopBtn.disabled = false;
-      batchTxtStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+      batchTxtStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
     }
+    if (batchHtmlStopBtn) batchHtmlStopBtn.style.display = 'none';
     
     try {
       const naverTabs = await chrome.tabs.query({
@@ -796,6 +839,10 @@ ${cleanedText}
       for (const tab of naverTabs) {
         if (isBatchTxtCancelled) {
           break;
+        }
+
+        if (batchTaskStatusText) {
+          batchTaskStatusText.textContent = `[${results.length + 1}/${naverTabs.length}] 블로그 추출 중...`;
         }
 
         try {
@@ -879,6 +926,7 @@ ${cleanedText}
       console.error('Batch export failed:', err);
       showToast('일괄 다운로드 중 오류가 발생했습니다.', true);
     } finally {
+      if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'none';
       if (batchTxtStopBtn) batchTxtStopBtn.style.display = 'none';
       batchBtn.disabled = false;
       batchSpinner.style.display = 'none';
@@ -935,10 +983,14 @@ ${cleanedText}
       isScreenshotCancelled = false;
       screenshotBtn.disabled = true;
       screenshotSpinner.style.display = 'inline-block';
+      if (screenshotProgressBar) screenshotProgressBar.style.display = 'flex';
+      if (screenshotStatusText) {
+        screenshotStatusText.textContent = '캡처 준비 중...';
+      }
       if (screenshotStopBtn) {
         screenshotStopBtn.style.display = 'inline-flex';
         screenshotStopBtn.disabled = false;
-        screenshotStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+        screenshotStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
       }
       
       try {
@@ -1142,6 +1194,11 @@ ${cleanedText}
 
           await sleep(250);
 
+          if (screenshotStatusText) {
+            const approxTotal = Math.max(1, Math.ceil(totalHeight / viewportHeight));
+            screenshotStatusText.textContent = `[${captures.length + 1}/${approxTotal}] 스크롤 캡처 중...`;
+          }
+
           // Capture visible tab safely with quota backoff retry
           const dataUrl = await safeCaptureVisibleTab(null, { format: 'png' });
           captures.push(dataUrl);
@@ -1296,6 +1353,7 @@ ${cleanedText}
         console.error('Screenshot failed:', err);
         showToast(`캡처 중 오류가 발생했습니다: ${err.message || err}`, true);
       } finally {
+        if (screenshotProgressBar) screenshotProgressBar.style.display = 'none';
         if (screenshotStopBtn) screenshotStopBtn.style.display = 'none';
         screenshotBtn.disabled = false;
         screenshotSpinner.style.display = 'none';
@@ -1614,11 +1672,16 @@ ${cleanedText}
 
           pdfSaveBtn.disabled = true;
           pdfSaveSpinner.style.display = 'inline-block';
-          if (copyBtn) copyBtn.style.display = 'none';
+          if (copyBtn) copyBtn.disabled = true;
+          if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'flex';
+          if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'none';
+          if (pdfBatchStatusText) {
+            pdfBatchStatusText.textContent = `[0/${validTabs.length}] 시작...`;
+          }
           if (pdfStopBtn) {
             pdfStopBtn.style.display = 'inline-flex';
             pdfStopBtn.disabled = false;
-            pdfStopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
+            pdfStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
           }
           if (pdfSaveBtnText) {
             pdfSaveBtnText.textContent = `[0/${validTabs.length}] 시작...`;
@@ -1641,8 +1704,10 @@ ${cleanedText}
           console.error('Batch PDF save failed:', err);
           showToast('일괄 저장 처리 중 오류가 발생했습니다.', true);
         } finally {
+          if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'none';
+          if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'flex';
           if (pdfStopBtn) pdfStopBtn.style.display = 'none';
-          if (copyBtn) copyBtn.style.display = 'inline-flex';
+          if (copyBtn) copyBtn.disabled = false;
           pdfSaveBtn.disabled = false;
           pdfSaveSpinner.style.display = 'none';
           if (pdfSaveBtnText) {
