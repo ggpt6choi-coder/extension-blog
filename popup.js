@@ -1129,16 +1129,32 @@ ${cleanedText}
             let cropWidth = clientWidth;
 
             if (shouldCrop) {
-              const selectors = [
+              const candidateSelectors = [
+                // Top purchase summary & order box
+                '[class*="summary" i]',
+                '[class*="order" i]',
+                '[class*="buy" i]',
+                '[class*="product_info" i]',
+                '[class*="item_info" i]',
+                'button[class*="buy" i]',
+                'button[class*="cart" i]',
+                'button[class*="pay" i]',
+                'button[class*="order" i]',
+                '[class*="btn_area" i]',
+                'fieldset',
+                'form',
+                // Detail description & content body
                 '#INTRODUCE',
                 '[class*="product_detail" i]',
                 '[class*="detail_view" i]',
-                '#content',
-                '#container',
+                '[class*="detail" i]',
                 '.se-main-container',
                 '.se_component_wrap',
                 '[class*="se_content" i]',
                 '[class*="content_area" i]',
+                // Content wrappers
+                '#content',
+                '#container',
                 'main',
                 '[role="main"]',
                 'article',
@@ -1148,41 +1164,52 @@ ${cleanedText}
 
               let minLeft = Infinity;
               let maxRight = -Infinity;
-              let found = false;
+              let foundCount = 0;
 
-              for (const sel of selectors) {
+              for (const sel of candidateSelectors) {
                 const els = document.querySelectorAll(sel);
                 els.forEach(el => {
-                  const r = el.getBoundingClientRect();
-                  if (r.width >= 350 && r.height >= 250 && r.width < clientWidth * 0.95) {
-                    if (r.left >= 0 && r.right <= clientWidth + 4) {
-                      minLeft = Math.min(minLeft, r.left);
-                      maxRight = Math.max(maxRight, r.right);
-                      found = true;
+                  try {
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden' || style.position === 'fixed') return;
+
+                    const r = el.getBoundingClientRect();
+                    // Must have visible content and not be a full-width background bar
+                    if (r.width >= 50 && r.height >= 20 && r.width < clientWidth * 0.96) {
+                      // Check horizontal position within viewport
+                      if (r.left >= 0 && r.right <= clientWidth) {
+                        // Skip small floating widgets at extreme edges
+                        if (r.right > clientWidth - 25 && r.width < 70) return;
+                        minLeft = Math.min(minLeft, r.left);
+                        maxRight = Math.max(maxRight, r.right);
+                        foundCount++;
+                      }
                     }
-                  }
+                  } catch (e) {}
                 });
               }
 
-              if (!found) {
+              // Fallback: check major child blocks of body / wrap
+              if (foundCount === 0) {
                 const majorBlocks = document.querySelectorAll('body > div, body > main, #wrap > div');
                 majorBlocks.forEach(el => {
                   const r = el.getBoundingClientRect();
-                  if (r.width >= 450 && r.width < clientWidth * 0.92 && r.height >= 400) {
+                  if (r.width >= 400 && r.width < clientWidth * 0.92 && r.height >= 300) {
                     const style = window.getComputedStyle(el);
-                    if (style.display !== 'none' && style.visibility !== 'hidden') {
+                    if (style.display !== 'none' && style.visibility !== 'hidden' && style.position !== 'fixed') {
                       minLeft = Math.min(minLeft, r.left);
                       maxRight = Math.max(maxRight, r.right);
-                      found = true;
+                      foundCount++;
                     }
                   }
                 });
               }
 
-              if (found && minLeft < maxRight && (maxRight - minLeft) >= 350) {
+              if (foundCount > 0 && minLeft < maxRight && (maxRight - minLeft) >= 350) {
                 const pad = 24;
                 const detectedX = Math.max(0, Math.floor(minLeft - pad));
                 const detectedW = Math.min(clientWidth - detectedX, Math.ceil(maxRight - minLeft + pad * 2));
+                // Only crop if there are meaningful side margins (at least 60px total empty space)
                 if (clientWidth - detectedW >= 60) {
                   cropX = detectedX;
                   cropWidth = detectedW;
