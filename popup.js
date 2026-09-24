@@ -968,6 +968,18 @@ ${cleanedText}
   const screenshotSpinner = document.getElementById('screenshot-spinner');
   const screenshotTarget = document.getElementById('screenshot-target');
 
+  const screenshotSmartCrop = document.getElementById('screenshot-smart-crop');
+  if (screenshotSmartCrop) {
+    chrome.storage.local.get(['screenshotSmartCrop'], (res) => {
+      if (res.screenshotSmartCrop !== undefined) {
+        screenshotSmartCrop.checked = res.screenshotSmartCrop;
+      }
+    });
+    screenshotSmartCrop.addEventListener('change', () => {
+      chrome.storage.local.set({ screenshotSmartCrop: screenshotSmartCrop.checked });
+    });
+  }
+
   // Helper for delay
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -1022,6 +1034,8 @@ ${cleanedText}
         screenshotStopBtn.disabled = false;
         screenshotStopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg><span>중지</span>';
       }
+
+      const enableSmartCrop = screenshotSmartCrop ? screenshotSmartCrop.checked : true;
       
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1043,7 +1057,7 @@ ${cleanedText}
           }
         }
 
-        showToast('📸 전체 스크롤 캡처 시작 (잠시 대기)...');
+        showToast('📸 전체 스크롤 캡처 시작 (고화질 준비 중)...');
 
         // 1. Pre-capture preparation: Auto-unfold collapsed detail descriptions & upgrade images to HD
         await chrome.scripting.executeScript({
@@ -1069,6 +1083,15 @@ ${cleanedText}
             } catch (e) {}
 
             // Upgrade all images to full HD source
+            const upgradeSrc = (src) => {
+              if (!src) return src;
+              let s = src;
+              if (s.includes('w80_blur')) s = s.replace('w80_blur', 'w966');
+              else if (s.includes('_blur')) s = s.replace(/type=[^&]+_blur/i, 'type=w966');
+              s = s.replace(/type=(?:w|m|f)(?:80|100|150|200|300|400|500|640)(?:_blur)?/gi, 'type=w966');
+              return s;
+            };
+
             const imgs = Array.from(document.querySelectorAll('img'));
             imgs.forEach(img => {
               img.loading = 'eager';
@@ -1080,11 +1103,8 @@ ${cleanedText}
                             img.getAttribute('_src') ||
                             img.src;
               if (realSrc) {
-                if (realSrc.includes('w80_blur')) realSrc = realSrc.replace('w80_blur', 'w966');
-                else if (realSrc.includes('_blur')) realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
-                if (realSrc.includes('type=w400')) realSrc = realSrc.replace('type=w400', 'type=w966');
-                if (realSrc.includes('type=w640')) realSrc = realSrc.replace('type=w640', 'type=w966');
-                if (img.src !== realSrc) img.src = realSrc;
+                const upgraded = upgradeSrc(realSrc);
+                if (img.src !== upgraded) img.src = upgraded;
               }
             });
           }
@@ -1093,17 +1113,92 @@ ${cleanedText}
         // Wait 400ms for DOM expansion and layout reflow
         await sleep(400);
 
-        // 2. Measure page dimensions after unfolding
+        // 2. Measure page dimensions after unfolding and detect content bounds
         const [dimensionsResult] = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          func: () => {
+          args: [enableSmartCrop],
+          func: (shouldCrop) => {
+            const clientWidth = document.documentElement.clientWidth;
+            const scrollHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+            const clientHeight = document.documentElement.clientHeight;
+            const pixelRatio = window.devicePixelRatio || 1;
+            const originalX = window.scrollX;
+            const originalY = window.scrollY;
+
+            let cropX = 0;
+            let cropWidth = clientWidth;
+
+            if (shouldCrop) {
+              const selectors = [
+                '#INTRODUCE',
+                '[class*="product_detail" i]',
+                '[class*="detail_view" i]',
+                '#content',
+                '#container',
+                '.se-main-container',
+                '.se_component_wrap',
+                '[class*="se_content" i]',
+                '[class*="content_area" i]',
+                'main',
+                '[role="main"]',
+                'article',
+                '.wrap_inner',
+                '#articleBody'
+              ];
+
+              let minLeft = Infinity;
+              let maxRight = -Infinity;
+              let found = false;
+
+              for (const sel of selectors) {
+                const els = document.querySelectorAll(sel);
+                els.forEach(el => {
+                  const r = el.getBoundingClientRect();
+                  if (r.width >= 350 && r.height >= 250 && r.width < clientWidth * 0.95) {
+                    if (r.left >= 0 && r.right <= clientWidth + 4) {
+                      minLeft = Math.min(minLeft, r.left);
+                      maxRight = Math.max(maxRight, r.right);
+                      found = true;
+                    }
+                  }
+                });
+              }
+
+              if (!found) {
+                const majorBlocks = document.querySelectorAll('body > div, body > main, #wrap > div');
+                majorBlocks.forEach(el => {
+                  const r = el.getBoundingClientRect();
+                  if (r.width >= 450 && r.width < clientWidth * 0.92 && r.height >= 400) {
+                    const style = window.getComputedStyle(el);
+                    if (style.display !== 'none' && style.visibility !== 'hidden') {
+                      minLeft = Math.min(minLeft, r.left);
+                      maxRight = Math.max(maxRight, r.right);
+                      found = true;
+                    }
+                  }
+                });
+              }
+
+              if (found && minLeft < maxRight && (maxRight - minLeft) >= 350) {
+                const pad = 24;
+                const detectedX = Math.max(0, Math.floor(minLeft - pad));
+                const detectedW = Math.min(clientWidth - detectedX, Math.ceil(maxRight - minLeft + pad * 2));
+                if (clientWidth - detectedW >= 60) {
+                  cropX = detectedX;
+                  cropWidth = detectedW;
+                }
+              }
+            }
+
             return {
-              scrollHeight: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight),
-              clientHeight: document.documentElement.clientHeight,
-              clientWidth: document.documentElement.clientWidth,
-              devicePixelRatio: window.devicePixelRatio || 1,
-              originalX: window.scrollX,
-              originalY: window.scrollY
+              scrollHeight,
+              clientHeight,
+              clientWidth,
+              devicePixelRatio: pixelRatio,
+              originalX,
+              originalY,
+              cropX,
+              cropWidth
             };
           }
         });
@@ -1145,12 +1240,10 @@ ${cleanedText}
           });
 
           // For scrolled slices (scrollY > 0), temporarily hide fixed floating elements & neutralize sticky headers
-          // to prevent duplicate banners, floating carts, and text being covered up
           if (scrollY > 0) {
             await chrome.scripting.executeScript({
               target: { tabId: tab.id },
               func: () => {
-                // Fixed elements (floating bars, buttons, sticky navs)
                 const fixedEls = [...document.querySelectorAll('*')].filter(el => {
                   try {
                     const style = window.getComputedStyle(el);
@@ -1164,7 +1257,6 @@ ${cleanedText}
                   el.style.visibility = 'hidden';
                 });
 
-                // Sticky elements: change to static so they don't stick to the top and obscure content
                 const stickyEls = [...document.querySelectorAll('*')].filter(el => {
                   try {
                     const style = window.getComputedStyle(el);
@@ -1191,6 +1283,15 @@ ${cleanedText}
                 return r.top < window.innerHeight + 100 && r.bottom > -100 && r.width > 0;
               });
 
+              const upgradeSrc = (src) => {
+                if (!src) return src;
+                let s = src;
+                if (s.includes('w80_blur')) s = s.replace('w80_blur', 'w966');
+                else if (s.includes('_blur')) s = s.replace(/type=[^&]+_blur/i, 'type=w966');
+                s = s.replace(/type=(?:w|m|f)(?:80|100|150|200|300|400|500|640)(?:_blur)?/gi, 'type=w966');
+                return s;
+              };
+
               imgs.forEach(img => {
                 img.loading = 'eager';
                 let realSrc = img.getAttribute('data-lazy-src') || 
@@ -1201,11 +1302,8 @@ ${cleanedText}
                               img.getAttribute('_src') ||
                               img.src;
                 if (realSrc) {
-                  if (realSrc.includes('w80_blur')) realSrc = realSrc.replace('w80_blur', 'w966');
-                  else if (realSrc.includes('_blur')) realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
-                  if (realSrc.includes('type=w400')) realSrc = realSrc.replace('type=w400', 'type=w966');
-                  if (realSrc.includes('type=w640')) realSrc = realSrc.replace('type=w640', 'type=w966');
-                  if (img.src !== realSrc) img.src = realSrc;
+                  const upgraded = upgradeSrc(realSrc);
+                  if (img.src !== upgraded) img.src = upgraded;
                 }
               });
 
@@ -1251,7 +1349,6 @@ ${cleanedText}
           func: (ox, oy) => {
             document.body.style.overflow = '';
             
-            // Restore hidden fixed & sticky elements
             const allModified = document.querySelectorAll('[data-prev-visibility], [data-prev-position]');
             allModified.forEach(el => {
               if (el.dataset.prevVisibility !== undefined) {
@@ -1273,10 +1370,9 @@ ${cleanedText}
           return;
         }
 
-        // 5. Stitch images together on canvas
-        showToast('🧩 이미지 조각 병합 중...');
+        // 5. Stitch images together on canvas with smart cropping and Retina/High-DPI super-sampling
+        showToast('🧩 고화질 이미지 조각 병합 중...');
 
-        // Load all captured image parts to get exact physical dimensions
         const loadedImages = await Promise.all(
           captures.map((dataUrl) => new Promise((resolve, reject) => {
             const img = new Image();
@@ -1291,21 +1387,30 @@ ${cleanedText}
         }
 
         const firstImg = loadedImages[0];
-        const nativeDpr = firstImg.naturalWidth / viewportWidth;
+        const capScaleX = firstImg.naturalWidth / viewportWidth;
+        const capScaleY = firstImg.naturalHeight / viewportHeight;
 
-        // Canvas safe limits (max dimension 65,000px, max pixel buffer 250M pixels)
-        const maxSafeHeight = 65000;
-        const maxSafePixels = 250000000;
+        // Use smart horizontal crop bounds if detected
+        const cropX = dim.cropX !== undefined ? dim.cropX : 0;
+        const cropWidth = dim.cropWidth !== undefined ? dim.cropWidth : viewportWidth;
 
-        let actualScale = nativeDpr;
+        // Canvas safe limits (max dimension 60,000px, max pixel buffer 200M pixels)
+        const maxSafeHeight = 60000;
+        const maxSafePixels = 200000000;
+
+        // Retina/High-DPI Super-sampling: target 2.0x for crisp clarity if memory limits allow
+        let actualScale = Math.max(pixelRatio, 2.0);
         if (totalHeight * actualScale > maxSafeHeight) {
           actualScale = Math.min(actualScale, maxSafeHeight / totalHeight);
         }
-        if (viewportWidth * actualScale * totalHeight * actualScale > maxSafePixels) {
-          actualScale = Math.min(actualScale, Math.sqrt(maxSafePixels / (viewportWidth * totalHeight)));
+        if (cropWidth * actualScale * totalHeight * actualScale > maxSafePixels) {
+          actualScale = Math.min(actualScale, Math.sqrt(maxSafePixels / (cropWidth * totalHeight)));
+        }
+        if (actualScale < 1.0 && totalHeight <= maxSafeHeight) {
+          actualScale = 1.0;
         }
 
-        const finalWidth = Math.round(viewportWidth * actualScale);
+        const finalWidth = Math.round(cropWidth * actualScale);
         const finalHeight = Math.round(totalHeight * actualScale);
 
         const canvas = document.createElement('canvas');
@@ -1322,29 +1427,32 @@ ${cleanedText}
           const img = loadedImages[i];
           const scrollY = scrollPositions[i];
           const drawY = Math.round(scrollY * actualScale);
-          const capScaleY = img.naturalHeight / viewportHeight;
+
+          const srcClipX = Math.round(cropX * capScaleX);
+          const srcClipW = Math.round(cropWidth * capScaleX);
 
           if (i < loadedImages.length - 1) {
             // Clip non-last slice to next scroll position to eliminate overlapping/ghosting
             const nextScrollY = scrollPositions[i + 1];
             const sliceHeightCss = nextScrollY - scrollY;
             const srcClipH = Math.round(sliceHeightCss * capScaleY);
-            const destH = Math.round(sliceHeightCss * actualScale);
+            const nextDrawY = Math.round(nextScrollY * actualScale);
+            const destH = nextDrawY - drawY;
 
             ctx.drawImage(
               img,
-              0, 0, img.naturalWidth, srcClipH,
+              srcClipX, 0, srcClipW, srcClipH,
               0, drawY, finalWidth, destH
             );
           } else {
             // Last slice: draw the remaining portion to the bottom
             const remainingCss = totalHeight - scrollY;
             const srcClipH = Math.round(remainingCss * capScaleY);
-            const destH = Math.round(remainingCss * actualScale);
+            const destH = finalHeight - drawY;
 
             ctx.drawImage(
               img,
-              0, 0, img.naturalWidth, srcClipH,
+              srcClipX, 0, srcClipW, srcClipH,
               0, drawY, finalWidth, destH
             );
           }
