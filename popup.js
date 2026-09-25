@@ -323,12 +323,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (activePdfState) {
         isPdfRunning = true;
         applyPdfBatchRunningState(activePdfState);
+      } else {
+        isPdfRunning = false;
+        if (pdfBatchProgressBar) pdfBatchProgressBar.style.display = 'none';
+        if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'flex';
+        if (pdfStopBtn) pdfStopBtn.style.display = 'none';
+        if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
       }
 
       const activeHtmlState = (htmlStatus && htmlStatus.isRunning) ? htmlStatus : (stored?.batchHtmlState?.isRunning ? stored.batchHtmlState : null);
       if (activeHtmlState) {
         isHtmlRunning = true;
         applyHtmlBatchRunningState(activeHtmlState);
+      } else {
+        isHtmlRunning = false;
+        if (batchTaskProgressBar) batchTaskProgressBar.style.display = 'none';
+        if (batchHtmlStopBtn) batchHtmlStopBtn.style.display = 'none';
+        if (batchHtmlSpinner) batchHtmlSpinner.style.display = 'none';
       }
     } catch (e) {
       console.warn('Initial batch status sync failed:', e);
@@ -732,6 +743,7 @@ ${cleanedText}
         showToast(`⏳ [${msg.current}/${msg.total}] PDF 생성 중: ${msg.title}`);
       }
     } else if (msg.type === 'BATCH_SAVE_PDF_CANCELLED') {
+      isPdfRunning = false;
       if (pdfSaveBtnText) {
         const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
         pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
@@ -744,6 +756,9 @@ ${cleanedText}
       if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
       showToast(`⏹️ PDF 일괄 저장이 중지되었습니다. (${msg.saved}/${msg.total}개 완료)`);
     } else if (msg.type === 'BATCH_SAVE_PDF_COMPLETE') {
+      isPdfRunning = false;
+      if (pdfSaveSpinner) pdfSaveSpinner.style.display = 'none';
+      if (pdfSaveBtn) pdfSaveBtn.disabled = false;
       if (pdfSaveBtnText) {
         const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
         pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
@@ -752,7 +767,6 @@ ${cleanedText}
       if (pdfBatchOptionRow) pdfBatchOptionRow.style.display = 'flex';
       if (pdfStopBtn) pdfStopBtn.style.display = 'none';
       if (copyBtn) copyBtn.disabled = false;
-      if (pdfSaveBtn) pdfSaveBtn.disabled = false;
       const toastMsg = msg.folder 
         ? `🎉 '${msg.folder}' 폴더에 총 ${msg.saved}개 PDF 저장 완료!`
         : `🎉 총 ${msg.saved}개 탭 PDF 저장 완료!`;

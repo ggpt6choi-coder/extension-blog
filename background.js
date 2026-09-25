@@ -442,6 +442,9 @@ async function saveTabAsPdf(tab, options = {}) {
   let targetTabId = tab.id;
   let tempTabId = null;
   let isConverted = false;
+  let savedTitle = tab.title || 'PDF_문서';
+  let savedFolder = options.subfolder || null;
+  let finalFilename = '';
 
   try {
     const parsed = new URL(tab.url);
@@ -699,10 +702,6 @@ async function saveTabAsPdf(tab, options = {}) {
         } catch (e) {}
       }
       
-      let savedTitle = 'PDF_문서';
-      let savedFolder = null;
-      let finalFilename = '';
-
       const sanitizeTitle = title.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '').substring(0, 35) || 'PDF_문서';
       savedTitle = sanitizeTitle;
 
@@ -722,11 +721,18 @@ async function saveTabAsPdf(tab, options = {}) {
         savedFolder = safeFolder;
       }
 
-      await chrome.downloads.download({
-        url: dataUrl,
-        filename: finalFilename,
-        saveAs: false
-      });
+      try {
+        await Promise.race([
+          chrome.downloads.download({
+            url: dataUrl,
+            filename: finalFilename,
+            saveAs: false
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Download trigger timeout')), 8000))
+        ]);
+      } catch (dlErr) {
+        console.warn('chrome.downloads.download warning/timeout:', dlErr);
+      }
 
       showWebToast(tab.id, isConverted ? '📄 모바일 최적화 PDF 다운로드 시작!' : '📄 PDF 파일 다운로드 시작!');
       pdfSaved = true;
@@ -1758,6 +1764,16 @@ let batchHtmlState = {
   status: 'idle'
 };
 
+// Reset stale running states from storage on worker start
+chrome.storage.local.get(['batchPdfState', 'batchHtmlState']).then((data) => {
+  if (data?.batchPdfState?.isRunning) {
+    chrome.storage.local.set({ batchPdfState: { ...data.batchPdfState, isRunning: false, status: 'complete' } }).catch(() => {});
+  }
+  if (data?.batchHtmlState?.isRunning) {
+    chrome.storage.local.set({ batchHtmlState: { ...data.batchHtmlState, isRunning: false, status: 'complete' } }).catch(() => {});
+  }
+}).catch(() => {});
+
 // Runtime message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'START_AUTO_COMMENT') {
@@ -1796,134 +1812,157 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabIds = message.tabIds || [];
       let successCount = 0;
       isBatchPdfCancelled = false;
-      batchPdfState = {
-        isRunning: true,
-        current: 0,
-        total: tabIds.length,
-        saved: 0,
-        title: '',
-        folder: '',
-        status: 'processing'
-      };
-      await chrome.storage.local.set({ batchPdfState }).catch(() => {});
-
       let batchFolder = null;
 
-      for (let i = 0; i < tabIds.length; i++) {
-        if (isBatchPdfCancelled) {
-          break;
-        }
-
-        const tabId = tabIds[i];
-        let tab = null;
-        try {
-          tab = await chrome.tabs.get(tabId);
-        } catch (e) {}
-
-        if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
-          continue;
-        }
-
-        batchPdfState.current = i + 1;
-        batchPdfState.title = tab.title || '페이지';
-        batchPdfState.status = 'processing';
-        chrome.storage.local.set({ batchPdfState }).catch(() => {});
-
-        // Broadcast start of current tab
-        chrome.runtime.sendMessage({
-          type: 'BATCH_SAVE_PDF_PROGRESS',
-          current: i + 1,
-          total: tabIds.length,
-          title: tab.title || '페이지',
-          folder: batchFolder || '',
-          status: 'processing'
-        }).catch(() => {});
-
-        try {
-          const res = await saveTabAsPdf(tab, { isBatch: true, subfolder: batchFolder });
-          if (res && res.success) {
-            successCount++;
-            if (!batchFolder && res.folder) {
-              batchFolder = res.folder;
-              batchPdfState.folder = batchFolder;
-            }
-            batchPdfState.saved = successCount;
-            batchPdfState.status = 'downloaded';
-            chrome.storage.local.set({ batchPdfState }).catch(() => {});
-          }
-        } catch (err) {
-          console.error(`Batch PDF tab ${tabId} failed:`, err);
-        }
-
-        if (isBatchPdfCancelled) {
-          break;
-        }
-
-        // Broadcast finished for this tab
-        chrome.runtime.sendMessage({
-          type: 'BATCH_SAVE_PDF_PROGRESS',
-          current: i + 1,
-          total: tabIds.length,
-          title: tab.title || '페이지',
-          folder: batchFolder || '',
-          status: 'downloaded'
-        }).catch(() => {});
-
-        // Delay between tabs to let debugger detach cleanly (checkable in 100ms intervals)
-        if (i < tabIds.length - 1) {
-          for (let d = 0; d < 10; d++) {
-            if (isBatchPdfCancelled) break;
-            await new Promise(r => setTimeout(r, 100));
-          }
-        }
-      }
-
-      batchPdfState.isRunning = false;
-      batchPdfState.status = isBatchPdfCancelled ? 'cancelled' : 'complete';
-      await chrome.storage.local.set({ batchPdfState }).catch(() => {});
-
-      if (isBatchPdfCancelled) {
-        chrome.runtime.sendMessage({
-          type: 'BATCH_SAVE_PDF_CANCELLED',
-          total: tabIds.length,
-          saved: successCount,
-          folder: batchFolder || ''
-        }).catch(() => {});
-
-        try {
-          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (activeTab && activeTab.id) {
-            const cancelMsg = batchFolder 
-              ? `⏹️ '${batchFolder}' 폴더에 ${successCount}/${tabIds.length}개 저장 후 중지되었습니다.`
-              : `⏹️ PDF 일괄 저장이 중지되었습니다. (${successCount}/${tabIds.length}개 완료)`;
-            showWebToast(activeTab.id, cancelMsg);
-          }
-        } catch (e) {}
-
-        sendResponse({ success: false, cancelled: true, total: tabIds.length, saved: successCount, folder: batchFolder });
-        return;
-      }
-
-      // Broadcast all tabs complete
-      chrome.runtime.sendMessage({
-        type: 'BATCH_SAVE_PDF_COMPLETE',
-        total: tabIds.length,
-        saved: successCount,
-        folder: batchFolder || ''
-      }).catch(() => {});
-
-      // Notify active tab with toast
       try {
-        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (activeTab && activeTab.id) {
-          const completeMsg = batchFolder 
-            ? `🎉 '${batchFolder}' 폴더에 총 ${successCount}개 탭 PDF 저장 완료!`
-            : `🎉 총 ${successCount}개 탭 PDF 일괄 저장 완료!`;
-          showWebToast(activeTab.id, completeMsg);
-        }
-      } catch (e) {}
+        batchPdfState = {
+          isRunning: true,
+          current: 0,
+          total: tabIds.length,
+          saved: 0,
+          title: '',
+          folder: '',
+          status: 'processing'
+        };
+        await chrome.storage.local.set({ batchPdfState }).catch(() => {});
 
-      sendResponse({ success: true, total: tabIds.length, saved: successCount, folder: batchFolder });
+        // Find first valid tab to determine batch folder name in advance
+        for (const tId of tabIds) {
+          try {
+            const t = await chrome.tabs.get(tId);
+            if (t && t.title && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('edge://') && !t.url.startsWith('about:')) {
+              batchFolder = t.title.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '').substring(0, 35) || 'PDF_모음';
+              break;
+            }
+          } catch (e) {}
+        }
+        if (!batchFolder) {
+          batchFolder = 'PDF_모음';
+        }
+        batchPdfState.folder = batchFolder;
+        await chrome.storage.local.set({ batchPdfState }).catch(() => {});
+
+        for (let i = 0; i < tabIds.length; i++) {
+          if (isBatchPdfCancelled) {
+            break;
+          }
+
+          const tabId = tabIds[i];
+          let tab = null;
+          try {
+            tab = await chrome.tabs.get(tabId);
+          } catch (e) {}
+
+          if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
+            continue;
+          }
+
+          batchPdfState.current = i + 1;
+          batchPdfState.title = tab.title || '페이지';
+          batchPdfState.status = 'processing';
+          chrome.storage.local.set({ batchPdfState }).catch(() => {});
+
+          // Broadcast start of current tab
+          chrome.runtime.sendMessage({
+            type: 'BATCH_SAVE_PDF_PROGRESS',
+            current: i + 1,
+            total: tabIds.length,
+            title: tab.title || '페이지',
+            folder: batchFolder,
+            status: 'processing'
+          }).catch(() => {});
+
+          try {
+            // Per-tab 35s safety timeout to prevent permanent hanging on any tab
+            const savePromise = saveTabAsPdf(tab, { isBatch: true, subfolder: batchFolder });
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Tab PDF save timed out after 35s')), 35000)
+            );
+            const res = await Promise.race([savePromise, timeoutPromise]);
+
+            if (res && res.success) {
+              successCount++;
+              batchPdfState.saved = successCount;
+              batchPdfState.status = 'downloaded';
+              chrome.storage.local.set({ batchPdfState }).catch(() => {});
+            }
+          } catch (err) {
+            console.error(`Batch PDF tab ${tabId} failed or timed out:`, err);
+          }
+
+          if (isBatchPdfCancelled) {
+            break;
+          }
+
+          // Broadcast finished for this tab
+          chrome.runtime.sendMessage({
+            type: 'BATCH_SAVE_PDF_PROGRESS',
+            current: i + 1,
+            total: tabIds.length,
+            title: tab.title || '페이지',
+            folder: batchFolder || '',
+            status: 'downloaded'
+          }).catch(() => {});
+
+          // Delay between tabs to let debugger detach cleanly (checkable in 100ms intervals)
+          if (i < tabIds.length - 1) {
+            for (let d = 0; d < 10; d++) {
+              if (isBatchPdfCancelled) break;
+              await new Promise(r => setTimeout(r, 100));
+            }
+          }
+        }
+      } catch (fatalErr) {
+        console.error('Fatal error in BATCH_SAVE_PDF_TABS:', fatalErr);
+      } finally {
+        // ALWAYS ensure running state is turned off and storage is updated
+        batchPdfState.isRunning = false;
+        batchPdfState.status = isBatchPdfCancelled ? 'cancelled' : 'complete';
+        batchPdfState.saved = successCount;
+        await chrome.storage.local.set({ batchPdfState }).catch(() => {});
+
+        if (isBatchPdfCancelled) {
+          chrome.runtime.sendMessage({
+            type: 'BATCH_SAVE_PDF_CANCELLED',
+            total: tabIds.length,
+            saved: successCount,
+            folder: batchFolder || ''
+          }).catch(() => {});
+
+          try {
+            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (activeTab && activeTab.id) {
+              const cancelMsg = batchFolder 
+                ? `⏹️ '${batchFolder}' 폴더에 ${successCount}/${tabIds.length}개 저장 후 중지되었습니다.`
+                : `⏹️ PDF 일괄 저장이 중지되었습니다. (${successCount}/${tabIds.length}개 완료)`;
+              showWebToast(activeTab.id, cancelMsg);
+            }
+          } catch (e) {}
+
+          sendResponse({ success: false, cancelled: true, total: tabIds.length, saved: successCount, folder: batchFolder });
+        } else {
+          // Broadcast all tabs complete
+          chrome.runtime.sendMessage({
+            type: 'BATCH_SAVE_PDF_COMPLETE',
+            total: tabIds.length,
+            saved: successCount,
+            folder: batchFolder || ''
+          }).catch(() => {});
+
+          // Notify active tab with toast
+          try {
+            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (activeTab && activeTab.id) {
+              const completeMsg = batchFolder 
+                ? `🎉 '${batchFolder}' 폴더에 총 ${successCount}개 탭 PDF 저장 완료!`
+                : `🎉 총 ${successCount}개 탭 PDF 일괄 저장 완료!`;
+              showWebToast(activeTab.id, completeMsg);
+            }
+          } catch (e) {}
+
+          sendResponse({ success: true, total: tabIds.length, saved: successCount, folder: batchFolder });
+        }
+      }
     })();
     return true;
   }
