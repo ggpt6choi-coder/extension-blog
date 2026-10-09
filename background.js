@@ -18,6 +18,15 @@ async function resolveRealBlogUrl(tabId, originalUrl) {
     const parsed = new URL(originalUrl);
     if (parsed.hostname !== 'blog.naver.com') return originalUrl;
 
+    // Fast path: If URL already contains post identifier, skip iframe inspection
+    const pathSegments = parsed.pathname.split('/').filter(Boolean);
+    const hasPostId = (parsed.searchParams.has('blogId') && parsed.searchParams.has('logNo')) ||
+                      (parsed.searchParams.has('logNo')) ||
+                      (pathSegments.length >= 2 && /^\d+$/.test(pathSegments[1]));
+    if (hasPostId) {
+      return originalUrl;
+    }
+
     const [frameCheck] = await chrome.scripting.executeScript({
       target: { tabId: tabId },
       func: () => {
@@ -483,25 +492,25 @@ async function saveTabAsPdf(tab, options = {}) {
               chrome.tabs.onUpdated.removeListener(checkTab);
               resolve();
             }
-          }, 12000);
+          }, 10000);
         });
 
-        // Settle delay for initial rendering
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        // Fast settle delay for initial rendering
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
   } catch (e) {
     console.warn('URL parsing or mobile tab creation failed:', e);
   }
 
-  // Pre-print preparation: auto-scroll for lazy load, eager-load images, inject print-only styles, and reset overflow
+  // Pre-print preparation: fast-scroll for lazy load, eager-load images, inject print-only styles, and reset overflow
   try {
     showWebToast(tab.id, '⏳ 상세 내용 및 이미지 준비 중...');
     await chrome.scripting.executeScript({
       target: { tabId: targetTabId },
       func: async () => {
         try {
-          // 1. Inject Print Optimization Styles (hides toasts, floating bars, resets overflow/height)
+          // 1. Inject Print Optimization Styles (hides toasts, floating bars, reaction bars, profile, resets overflow/height)
           let printStyle = document.getElementById('nblm-pdf-print-fix');
           if (!printStyle) {
             printStyle = document.createElement('style');
@@ -517,7 +526,19 @@ async function saveTabAsPdf(tab, options = {}) {
                 .u_ft, .pop_notice, .top_banner, [class*="toast" i],
                 [class*="BottomBar" i], [class*="bottom_bar" i],
                 [class*="snackBar" i], [class*="snackbar" i],
-                [class*="skeleton" i], [class*="Skeleton" i], [class*="shimmer" i] {
+                [class*="skeleton" i], [class*="Skeleton" i], [class*="shimmer" i],
+                /* Hide web-only buttons: follow/add-neighbor, more-menu */
+                .btn_follow, [class*="btn_follow" i], [class*="follow" i],
+                .btn_more, [class*="btn_more" i], [class*="more_menu" i],
+                /* Hide sympathy/reactions, comment counts, share buttons */
+                .area_sympathy, [class*="sympathy" i],
+                .u_likeit_list_module, [class*="likeit" i], .u_likeit_module,
+                .post_btn_item, [class*="comment_count" i], [class*="comment_btn" i],
+                /* Hide author profile box to prevent orphan blank last page */
+                .author_area, [class*="author_area" i], .blog_profile, [class*="profile_area" i],
+                .blog_author, [class*="writer_info" i],
+                /* Deduplicate repeated tags */
+                .post_tag + .post_tag, [class*="tag_list" i] ~ [class*="tag_list" i] {
                   display: none !important;
                   visibility: hidden !important;
                 }
@@ -539,15 +560,25 @@ async function saveTabAsPdf(tab, options = {}) {
                 table, tr, td, th, [class*="table" i],
                 figure, .se-module-image, [class*="module_image" i],
                 [class*="component_image" i], .se-component-image,
-                .se-oglink, [class*="oglink" i], [class*="link_card" i] {
+                .se-oglink, [class*="oglink" i], [class*="link_card" i],
+                /* Keep parent SmartEditor component intact with following content to prevent orphan headings */
+                .se-component:has(.se-section-title),
+                .se-component:has(.se-title-text),
+                .se-component:has(.se-quote),
+                .se-component:has(.se-quotation),
+                .se-component:has(.se-horizontalLine),
+                .se-component:has(h1, h2, h3, h4, h5, h6) {
                   break-inside: avoid !important;
                   page-break-inside: avoid !important;
+                  break-after: avoid !important;
+                  page-break-after: avoid !important;
                 }
 
-                /* Keep headings attached to subsequent paragraphs */
+                /* Keep headings and lines attached to subsequent paragraphs */
                 h1, h2, h3, h4, h5, h6,
                 .se-section-title, [class*="section_title" i], [class*="sectionTitle" i],
-                .se-title-text, [class*="se-title" i] {
+                .se-title-text, [class*="se-title" i],
+                .se-horizontalLine, [class*="horizontalLine" i] {
                   break-after: avoid !important;
                   page-break-after: avoid !important;
                 }
@@ -557,14 +588,27 @@ async function saveTabAsPdf(tab, options = {}) {
                   page-break-inside: avoid !important;
                   break-inside: avoid !important;
                 }
+
+                /* Constrain large card-news vertical images to avoid giant blank page gaps */
+                .se-module-image img,
+                .se-component-image img,
+                .se-image-container img,
+                .se-main-container img {
+                  max-height: 56vh !important;
+                  width: auto !important;
+                  object-fit: contain !important;
+                  margin-left: auto !important;
+                  margin-right: auto !important;
+                  display: block !important;
+                }
               }
             `;
             document.head.appendChild(printStyle);
           }
 
-          // 2. Wait for dynamic SPA content (React / Vue) to finish initial rendering & remove skeletons
+          // 2. Fast check for dynamic SPA content (React / Vue) to finish initial rendering & remove skeletons
           const startTime = Date.now();
-          const maxWaitMs = 6000;
+          const maxWaitMs = 4000;
           while (Date.now() - startTime < maxWaitMs) {
             const hasPostContainer = document.querySelector('.se-main-container, #viewTypeSelector, [class*="post_article"], [class*="se_doc_viewer"]');
             const hasSkeleton = document.querySelector('[class*="skeleton" i], [class*="Skeleton" i], [class*="shimmer" i]');
@@ -575,13 +619,10 @@ async function saveTabAsPdf(tab, options = {}) {
             if (hasListItem && !hasSkeleton) {
               break;
             }
-            await new Promise(r => setTimeout(r, 200));
+            await new Promise(r => setTimeout(r, 80));
           }
 
-          // Brief delay to ensure DOM settle
-          await new Promise(r => setTimeout(r, 300));
-
-          // 3. Auto-scroll down the entire page to trigger IntersectionObserver & scroll-based lazy loading
+          // 3. Fast auto-scroll: 2-step jump triggers IntersectionObserver & lazy load without wasting seconds
           const originalScrollY = window.scrollY;
           const postContainer = document.querySelector('.se-main-container, #viewTypeSelector, [class*="post_article"], [class*="se_doc_viewer"]');
           
@@ -590,17 +631,13 @@ async function saveTabAsPdf(tab, options = {}) {
             const rect = postContainer.getBoundingClientRect();
             maxScrollTarget = Math.min(window.scrollY + rect.bottom + 400, maxScrollTarget);
           } else {
-            // Cap at 3500px for feed/list pages to prevent infinite scroll runaway
             maxScrollTarget = Math.min(maxScrollTarget, 3500);
           }
 
-          const scrollStep = Math.max(window.innerHeight, 500);
-          for (let pos = 0; pos < maxScrollTarget; pos += scrollStep) {
-            window.scrollTo(0, pos);
-            await new Promise(r => setTimeout(r, 70));
-          }
-
-          // Restore scroll position
+          window.scrollTo(0, maxScrollTarget * 0.5);
+          await new Promise(r => setTimeout(r, 40));
+          window.scrollTo(0, maxScrollTarget);
+          await new Promise(r => setTimeout(r, 40));
           window.scrollTo(0, originalScrollY);
 
           // 4. Eager-load and swap real URLs for all lazy images
@@ -638,7 +675,7 @@ async function saveTabAsPdf(tab, options = {}) {
             if (img.src && !img.complete) {
               waitPromises.push(new Promise(res => {
                 img.onload = img.onerror = res;
-                setTimeout(res, 4000); // 4s timeout safety per image
+                setTimeout(res, 1800); // 1.8s timeout safety per image
               }));
             }
           });
@@ -651,20 +688,26 @@ async function saveTabAsPdf(tab, options = {}) {
             }
           });
 
-          // Wait for all images and web fonts
+          // Wait for all images with overall safety deadline (max 2.0s)
           if (waitPromises.length > 0) {
-            await Promise.all(waitPromises);
+            await Promise.race([
+              Promise.all(waitPromises),
+              new Promise(res => setTimeout(res, 2000))
+            ]);
           }
           if (document.fonts && document.fonts.ready) {
-            await document.fonts.ready.catch(() => {});
+            await Promise.race([
+              document.fonts.ready,
+              new Promise(res => setTimeout(res, 500))
+            ]).catch(() => {});
           }
         } catch (e) {
           console.error('Pre-print preparation failed:', e);
         }
       }
     });
-    // Brief settle buffer for layout reflow
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Brief settle buffer for layout reflow (reduced to 120ms)
+    await new Promise((resolve) => setTimeout(resolve, 120));
   } catch (e) {
     console.warn('Pre-print script execution failed:', e);
   }
@@ -1904,12 +1947,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             status: 'downloaded'
           }).catch(() => {});
 
-          // Delay between tabs to let debugger detach cleanly (checkable in 100ms intervals)
+          // Minimal settle delay between tabs (reduced from 1000ms to 120ms for fast batch processing)
           if (i < tabIds.length - 1) {
-            for (let d = 0; d < 10; d++) {
-              if (isBatchPdfCancelled) break;
-              await new Promise(r => setTimeout(r, 100));
-            }
+            await new Promise(r => setTimeout(r, 120));
           }
         }
       } catch (fatalErr) {
