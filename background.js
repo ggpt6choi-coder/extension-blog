@@ -495,8 +495,8 @@ async function saveTabAsPdf(tab, options = {}) {
           }, 10000);
         });
 
-        // Fast settle delay for initial rendering
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        // Minimal settle buffer before script injection (DOM readiness handled via MutationObserver)
+        await new Promise((resolve) => setTimeout(resolve, 30));
       }
     }
   } catch (e) {
@@ -553,76 +553,88 @@ async function saveTabAsPdf(tab, options = {}) {
                 }
 
                 /* Avoid splitting headings, quotes, tables, and link cards across page breaks */
-                h1, h2, h3, h4, h5, h6,
+                h2, h3, h4, h5, h6,
                 .se-section-title, [class*="section_title" i], [class*="sectionTitle" i],
-                .se-title-text, [class*="se-title" i],
                 blockquote, .se-quote, [class*="se-quote" i],
                 table, tr, td, th, [class*="table" i],
-                figure, .se-module-image, [class*="module_image" i],
-                [class*="component_image" i], .se-component-image,
-                .se-oglink, [class*="oglink" i], [class*="link_card" i],
-                /* Keep parent SmartEditor component intact with following content to prevent orphan headings */
-                .se-component:has(.se-section-title),
-                .se-component:has(.se-title-text),
-                .se-component:has(.se-quote),
-                .se-component:has(.se-quotation),
-                .se-component:has(.se-horizontalLine),
-                .se-component:has(h1, h2, h3, h4, h5, h6) {
+                .se-oglink, [class*="oglink" i], [class*="link_card" i] {
                   break-inside: avoid !important;
                   page-break-inside: avoid !important;
+                }
+
+                /* Keep section headings attached to subsequent content */
+                h2, h3, h4, h5, h6,
+                .se-section-title, [class*="section_title" i], [class*="sectionTitle" i] {
                   break-after: avoid !important;
                   page-break-after: avoid !important;
                 }
 
-                /* Keep headings and lines attached to subsequent paragraphs */
-                h1, h2, h3, h4, h5, h6,
-                .se-section-title, [class*="section_title" i], [class*="sectionTitle" i],
-                .se-title-text, [class*="se-title" i],
-                .se-horizontalLine, [class*="horizontalLine" i] {
-                  break-after: avoid !important;
-                  page-break-after: avoid !important;
-                }
-
-                img, figure {
+                /* Prevent image containers from being cut or sliced across page breaks */
+                figure,
+                .se-component.se-image,
+                .se-component[class*="se-image"],
+                [class*="component_image" i],
+                .se-section-image,
+                .se-module-image,
+                [class*="module_image" i],
+                .se-image-container,
+                [class*="image_container" i] {
+                  break-inside: avoid !important;
+                  page-break-inside: avoid !important;
+                  display: block !important;
                   max-width: 100% !important;
-                  page-break-inside: avoid !important;
-                  break-inside: avoid !important;
                 }
 
-                /* Constrain large card-news vertical images to avoid giant blank page gaps */
-                .se-module-image img,
-                .se-component-image img,
-                .se-image-container img,
-                .se-main-container img {
-                  max-height: 56vh !important;
-                  width: auto !important;
+                /* Ensure all images maintain their natural aspect ratio, full width, and never slice */
+                img, figure img, .se-main-container img, .se-module-image img {
+                  max-width: 100% !important;
+                  max-height: 250mm !important;
+                  height: auto !important;
                   object-fit: contain !important;
+                  break-inside: avoid !important;
+                  page-break-inside: avoid !important;
+                  display: block !important;
                   margin-left: auto !important;
                   margin-right: auto !important;
-                  display: block !important;
                 }
               }
             `;
             document.head.appendChild(printStyle);
           }
 
-          // 2. Fast check for dynamic SPA content (React / Vue) to finish initial rendering & remove skeletons
-          const startTime = Date.now();
-          const maxWaitMs = 4000;
-          while (Date.now() - startTime < maxWaitMs) {
+          // Frame tick helper (uses requestAnimationFrame when tab is visible, or fast tick if backgrounded)
+          const nextFrame = () => new Promise(res => {
+            if (!document.hidden && typeof requestAnimationFrame === 'function') {
+              requestAnimationFrame(res);
+            } else {
+              setTimeout(res, 20);
+            }
+          });
+
+          // 2. State-driven check for dynamic SPA content (React / Vue) to finish initial rendering & remove skeletons
+          const isDomReady = () => {
             const hasPostContainer = document.querySelector('.se-main-container, #viewTypeSelector, [class*="post_article"], [class*="se_doc_viewer"]');
             const hasSkeleton = document.querySelector('[class*="skeleton" i], [class*="Skeleton" i], [class*="shimmer" i]');
-            if (hasPostContainer && !hasSkeleton) {
-              break;
-            }
+            if (hasPostContainer && !hasSkeleton) return true;
             const hasListItem = document.querySelector('[class*="postlist" i], [class*="post_item" i], [class*="item_box" i]');
-            if (hasListItem && !hasSkeleton) {
-              break;
-            }
-            await new Promise(r => setTimeout(r, 80));
+            return !!(hasListItem && !hasSkeleton);
+          };
+
+          if (!isDomReady()) {
+            await new Promise((resolve) => {
+              const start = Date.now();
+              const observer = new MutationObserver(() => {
+                if (isDomReady() || Date.now() - start > 3000) {
+                  observer.disconnect();
+                  resolve();
+                }
+              });
+              observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+              setTimeout(() => { observer.disconnect(); resolve(); }, 3000);
+            });
           }
 
-          // 3. Fast auto-scroll: 2-step jump triggers IntersectionObserver & lazy load without wasting seconds
+          // 3. Fast auto-scroll: step through content to trigger IntersectionObserver & lazy load
           const originalScrollY = window.scrollY;
           const postContainer = document.querySelector('.se-main-container, #viewTypeSelector, [class*="post_article"], [class*="se_doc_viewer"]');
           
@@ -634,15 +646,17 @@ async function saveTabAsPdf(tab, options = {}) {
             maxScrollTarget = Math.min(maxScrollTarget, 3500);
           }
 
-          window.scrollTo(0, maxScrollTarget * 0.5);
-          await new Promise(r => setTimeout(r, 40));
+          const scrollStep = Math.max(window.innerHeight * 1.5, 900);
+          for (let pos = 0; pos < maxScrollTarget; pos += scrollStep) {
+            window.scrollTo(0, pos);
+            await nextFrame();
+          }
           window.scrollTo(0, maxScrollTarget);
-          await new Promise(r => setTimeout(r, 40));
+          await nextFrame();
           window.scrollTo(0, originalScrollY);
 
           // 4. Eager-load and swap real URLs for all lazy images
           const imgs = Array.from(document.querySelectorAll('img'));
-          const waitPromises = [];
 
           imgs.forEach(img => {
             img.loading = 'eager';
@@ -671,13 +685,6 @@ async function saveTabAsPdf(tab, options = {}) {
             if (realSrc && img.src !== realSrc) {
               img.src = realSrc;
             }
-
-            if (img.src && !img.complete) {
-              waitPromises.push(new Promise(res => {
-                img.onload = img.onerror = res;
-                setTimeout(res, 1800); // 1.8s timeout safety per image
-              }));
-            }
           });
 
           // Also check for background images
@@ -688,26 +695,46 @@ async function saveTabAsPdf(tab, options = {}) {
             }
           });
 
-          // Wait for all images with overall safety deadline (max 2.0s)
-          if (waitPromises.length > 0) {
+          // 5. Native img.decode() event-driven synchronization (pixel decoding & layout readiness)
+          const decodePromises = imgs
+            .filter(img => img.src && !img.src.startsWith('data:image/svg'))
+            .map(img => {
+              if (typeof img.decode === 'function') {
+                return img.decode().catch(() => {});
+              }
+              if (img.complete) return Promise.resolve();
+              return new Promise(res => {
+                img.onload = img.onerror = res;
+              });
+            });
+
+          if (decodePromises.length > 0) {
             await Promise.race([
-              Promise.all(waitPromises),
-              new Promise(res => setTimeout(res, 2000))
+              Promise.all(decodePromises),
+              new Promise(res => setTimeout(res, 2500))
             ]);
           }
+
+          // 6. Native font readiness event
           if (document.fonts && document.fonts.ready) {
             await Promise.race([
               document.fonts.ready,
               new Promise(res => setTimeout(res, 500))
             ]).catch(() => {});
           }
+
+          // 7. Force synchronous layout recalculation and frame commit
+          if (document.body) {
+            document.body.offsetHeight;
+          }
+          await nextFrame();
         } catch (e) {
           console.error('Pre-print preparation failed:', e);
         }
       }
     });
-    // Brief settle buffer for layout reflow (reduced to 120ms)
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    // Brief settle buffer for layout reflow
+    await new Promise((resolve) => setTimeout(resolve, 30));
   } catch (e) {
     console.warn('Pre-print script execution failed:', e);
   }
