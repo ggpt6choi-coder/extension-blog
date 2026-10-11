@@ -558,10 +558,14 @@
         </button>
       </div>
 
-      <div id="pdf-batch-option-row" style="display: flex; align-items: center; justify-content: flex-end; margin-top: 6px; font-size: 11px; color: var(--text-muted);">
+      <div id="pdf-batch-option-row" style="display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-top: 6px; font-size: 11px; color: var(--text-muted);">
         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;">
           <input type="checkbox" id="pdf-batch-checkbox" style="cursor: pointer; accent-color: #03c75a;">
           <span>열린 탭 모두 각각 PDF 저장 (<span id="pdf-batch-tab-count">0</span>개)</span>
+        </label>
+        <label id="pdf-batch-naver-only-label" style="display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;">
+          <input type="checkbox" id="pdf-batch-naver-only" checked style="cursor: pointer; accent-color: #03c75a;">
+          <span>blog.naver.com 탭만 대상</span>
         </label>
       </div>
     </div>

@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pdfSaveBtnText = document.getElementById('pdf-save-btn-text');
   const pdfStopBtn = document.getElementById('pdf-stop-btn');
   const pdfBatchCheckbox = document.getElementById('pdf-batch-checkbox');
+  const pdfBatchNaverOnly = document.getElementById('pdf-batch-naver-only');
   const pdfBatchTabCount = document.getElementById('pdf-batch-tab-count');
   const pdfBatchProgressBar = document.getElementById('pdf-batch-progress-bar');
   const pdfBatchStatusText = document.getElementById('pdf-batch-status-text');
@@ -207,6 +208,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // Update PDF batch tab count & button text according to naver-only filter
+  async function updatePdfBatchCount() {
+    if (!pdfBatchTabCount) return;
+    try {
+      const allTabsInWindow = await chrome.tabs.query({ currentWindow: true });
+      const validWebTabs = allTabsInWindow.filter(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
+      const isNaverOnly = pdfBatchNaverOnly ? pdfBatchNaverOnly.checked : true;
+      const targetTabs = isNaverOnly 
+        ? validWebTabs.filter(t => isNaverBlogUrl(t.url))
+        : validWebTabs;
+      
+      pdfBatchTabCount.textContent = `${targetTabs.length}`;
+      if (pdfBatchCheckbox && pdfBatchCheckbox.checked && pdfSaveBtnText) {
+        pdfSaveBtnText.textContent = `PDF 일괄 저장 (${targetTabs.length}개)`;
+      }
+    } catch (e) {
+      console.warn('updatePdfBatchCount failed:', e);
+    }
+  }
+
   // Tab Switcher Functions & Handlers
   function switchTab(tabId) {
     // Reset all tabs
@@ -238,7 +259,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load last active tab & prompt checkbox from storage on startup
   try {
-    chrome.storage.local.get(['activeTab', 'cafeIncludePrompt'], (result) => {
+    chrome.storage.local.get(['activeTab', 'cafeIncludePrompt', 'pdfBatchNaverOnly'], (result) => {
       if (result && result.activeTab) {
         switchTab(result.activeTab);
       } else {
@@ -247,6 +268,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (cafeIncludePrompt && result && typeof result.cafeIncludePrompt === 'boolean') {
         cafeIncludePrompt.checked = result.cafeIncludePrompt;
       }
+      if (pdfBatchNaverOnly) {
+        if (result && typeof result.pdfBatchNaverOnly === 'boolean') {
+          pdfBatchNaverOnly.checked = result.pdfBatchNaverOnly;
+        } else {
+          pdfBatchNaverOnly.checked = true; // default true
+        }
+      }
+      updatePdfBatchCount();
     });
   } catch (e) {
     console.error('Failed to load active tab from storage:', e);
@@ -437,9 +466,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (batchWebCount) {
       batchWebCount.textContent = `${validWebTabs.length}개 감지됨`;
     }
-    if (pdfBatchTabCount) {
-      pdfBatchTabCount.textContent = `${validWebTabs.length}`;
-    }
+    await updatePdfBatchCount();
     if (!isHtmlRunning && batchHtmlBtn) {
       batchHtmlBtn.disabled = validWebTabs.length === 0;
     }
@@ -1812,15 +1839,28 @@ ${cleanedText}
 
   // PDF Batch Checkbox Toggle Handler
   if (pdfBatchCheckbox) {
-    pdfBatchCheckbox.addEventListener('change', () => {
+    pdfBatchCheckbox.addEventListener('change', async () => {
       if (!pdfSaveBtnText) return;
       if (pdfBatchCheckbox.checked) {
+        await updatePdfBatchCount();
         const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '0';
         pdfSaveBtnText.textContent = `PDF 일괄 저장 (${count}개)`;
         if (pdfSaveBtn) pdfSaveBtn.disabled = false;
       } else {
         pdfSaveBtnText.textContent = 'PDF 저장';
       }
+    });
+  }
+
+  // PDF Batch Naver Only Checkbox Toggle Handler
+  if (pdfBatchNaverOnly) {
+    pdfBatchNaverOnly.addEventListener('change', async () => {
+      try {
+        chrome.storage.local.set({ pdfBatchNaverOnly: pdfBatchNaverOnly.checked });
+      } catch (e) {
+        console.error(e);
+      }
+      await updatePdfBatchCount();
     });
   }
 
@@ -1845,9 +1885,14 @@ ${cleanedText}
       if (pdfBatchCheckbox && pdfBatchCheckbox.checked) {
         try {
           const allTabs = await chrome.tabs.query({ currentWindow: true });
-          const validTabs = allTabs.filter(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
+          let validTabs = allTabs.filter(t => t.url && (t.url.startsWith('http://') || t.url.startsWith('https://')));
+          const isNaverOnly = pdfBatchNaverOnly ? pdfBatchNaverOnly.checked : true;
+          if (isNaverOnly) {
+            validTabs = validTabs.filter(t => isNaverBlogUrl(t.url));
+          }
+
           if (validTabs.length === 0) {
-            showToast('저장할 웹페이지 탭이 없습니다.', true);
+            showToast(isNaverOnly ? '저장할 blog.naver.com 탭이 없습니다.' : '저장할 웹페이지 탭이 없습니다.', true);
             return;
           }
 
@@ -1894,10 +1939,7 @@ ${cleanedText}
           if (copyBtn) copyBtn.disabled = false;
           pdfSaveBtn.disabled = false;
           pdfSaveSpinner.style.display = 'none';
-          if (pdfSaveBtnText) {
-            const count = pdfBatchTabCount ? pdfBatchTabCount.textContent : '';
-            pdfSaveBtnText.textContent = pdfBatchCheckbox && pdfBatchCheckbox.checked ? `PDF 일괄 저장 (${count}개)` : 'PDF 저장';
-          }
+          await updatePdfBatchCount();
         }
         return;
       }
