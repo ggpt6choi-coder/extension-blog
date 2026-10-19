@@ -29,7 +29,7 @@
     }
     
     body {
-      width: 380px;
+      width: 420px;
       font-family: var(--font-family);
       background-color: var(--bg-dark);
       color: var(--text-main);
@@ -136,10 +136,14 @@
     
     .badge {
       font-size: 10px;
-      padding: 2px 8px;
-      border-radius: 20px;
-      font-weight: 600;
-      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1.2;
     }
     
     .badge-success {
@@ -428,17 +432,18 @@
     
     .tab-nav-btn {
       flex: 1;
-      padding: 8px 12px;
+      padding: 8px 5px;
       border-radius: 6px;
       border: none;
       background: transparent;
       color: var(--text-sub);
       font-family: var(--font-family);
-      font-size: 13px;
+      font-size: 11.5px;
       font-weight: 500;
       cursor: pointer;
       transition: all 0.2s ease;
       text-align: center;
+      white-space: nowrap;
     }
     
     .tab-nav-btn:hover {
@@ -497,6 +502,75 @@
       padding: 8px 12px !important;
       font-size: 12px !important;
     }
+
+    /* Keyword & QRA UI Styles */
+    .keyword-search-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .keyword-input {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--text-main);
+      font-family: var(--font-family);
+      font-size: 12px;
+      transition: all 0.2s ease;
+    }
+    .keyword-input:focus {
+      outline: none;
+      border-color: var(--accent-naver);
+      background: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 0 12px rgba(3, 199, 90, 0.15);
+    }
+    .keyword-chips-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+      padding: 2px 0;
+    }
+    .keyword-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 9px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      font-size: 11.5px;
+      line-height: 1.25;
+      color: var(--text-main);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .keyword-chip:hover {
+      background: rgba(3, 199, 90, 0.15);
+      border-color: rgba(3, 199, 90, 0.4);
+      color: var(--accent-naver);
+      transform: translateY(-1px);
+    }
+    .keyword-chip.qra-chip {
+      background: rgba(16, 185, 129, 0.08);
+      border-color: rgba(16, 185, 129, 0.25);
+      font-weight: 500;
+    }
+    .keyword-chip.qra-chip:hover {
+      background: rgba(16, 185, 129, 0.2);
+      border-color: var(--accent-glow);
+    }
+    .keyword-chip .chip-copy-icon {
+      opacity: 0.45;
+      font-size: 9px;
+      flex-shrink: 0;
+    }
+    .keyword-chip:hover .chip-copy-icon {
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -510,8 +584,9 @@
 
   <!-- Segmented Tab Switcher -->
   <div class="tabs-nav">
-    <button class="tab-nav-btn active" id="tab-btn-blog">블로그 & 일반</button>
     <button class="tab-nav-btn" id="tab-btn-cafe">네이버 카페</button>
+    <button class="tab-nav-btn active" id="tab-btn-blog">블로그 & 일반</button>
+    <button class="tab-nav-btn" id="tab-btn-keyword">🔍 키워드/QRA</button>
     <button class="tab-nav-btn" id="tab-btn-write">✍️ 블로그 글쓰기</button>
   </div>
 
@@ -547,15 +622,26 @@
       </div>
 
       <!-- PDF Batch Progress Bar (shown when batch saving is active) -->
-      <div id="pdf-batch-progress-bar" style="display: none; align-items: center; justify-content: space-between; margin-top: 8px; padding: 6px 10px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 6px;">
-        <div style="display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-main); font-weight: 500; min-width: 0; flex: 1; overflow: hidden;">
-          <span class="spinner" style="display: inline-block; width: 12px; height: 12px; border-width: 2px; flex-shrink: 0;"></span>
-          <span id="pdf-batch-status-text" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">PDF 저장 진행 중...</span>
+      <div id="pdf-batch-progress-bar" style="display: none; flex-direction: column; gap: 6px; margin-top: 8px; padding: 7px 10px; background: rgba(3, 199, 90, 0.08); border: 1px solid rgba(3, 199, 90, 0.25); border-radius: 6px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-main); font-weight: 500; min-width: 0; flex: 1; overflow: hidden;">
+            <span class="spinner" style="display: inline-block; width: 12px; height: 12px; border-width: 2px; flex-shrink: 0;"></span>
+            <span id="pdf-batch-status-text" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">PDF 저장 진행 중...</span>
+          </div>
+          <button class="btn btn-danger" id="pdf-stop-btn" style="width: auto; padding: 3px 8px; font-size: 10.5px; height: 22px; border-radius: 4px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; margin-left: 8px;">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
+            <span>중지</span>
+          </button>
         </div>
-        <button class="btn btn-danger" id="pdf-stop-btn" style="width: auto; padding: 4px 10px; font-size: 11px; height: 24px; border-radius: 4px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; margin-left: 8px;">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
-          <span>중지</span>
-        </button>
+        <div style="width: 100%; height: 5px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden;">
+          <div id="pdf-batch-progress-fill" style="width: 0%; height: 100%; background: #03c75a; border-radius: 3px; transition: width 0.3s ease;"></div>
+        </div>
+      </div>
+
+      <!-- PDF Batch Last Completed Notice -->
+      <div id="pdf-batch-complete-notice" style="display: none; align-items: center; justify-content: space-between; margin-top: 6px; padding: 6px 10px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 6px; font-size: 11px; color: var(--accent-glow);">
+        <span id="pdf-batch-complete-text" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">✅ 최근 PDF 저장: 완료</span>
+        <button id="pdf-batch-notice-close" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 0 4px; flex-shrink: 0;" title="닫기">✕</button>
       </div>
 
       <div id="pdf-batch-option-row" style="display: flex; flex-direction: column; align-items: flex-end; gap: 5px; margin-top: 6px; font-size: 11px; color: var(--text-muted);">
@@ -788,6 +874,122 @@
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
           <span>지침서 복사</span>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyword & QRA Tab Content -->
+  <div id="container-keyword" class="tab-content">
+    <!-- Search & Active Tab Sync Card -->
+    <div class="card card-compact">
+      <div class="card-title">
+        <span>키워드 검색 & QRA 분석</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <button id="keyword-clear-btn" class="btn btn-secondary" style="display: none; padding: 2px 7px; font-size: 10px; height: 20px; border-radius: 4px; width: auto;" title="조회 내용 초기화">초기화</button>
+          <span class="badge badge-success" id="keyword-status-badge">실시간 연동</span>
+        </div>
+      </div>
+      
+      <div class="keyword-search-bar">
+        <input type="text" id="keyword-search-input" class="keyword-input" placeholder="키워드 입력 (예: 보승회관 잠실점)" autocomplete="off">
+        <button class="btn btn-primary" id="keyword-search-btn" style="width: auto; padding: 8px 14px; font-size: 12px;">
+          <span class="spinner" id="keyword-spinner" style="display: none; width: 12px; height: 12px;"></span>
+          <svg id="keyword-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <span id="keyword-search-btn-text">조회</span>
+        </button>
+      </div>
+
+      <!-- Sub-bar: Hint on Left, Sync Current Tab on Right -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; min-height: 26px; gap: 8px;">
+        <span id="keyword-tab-detect-hint" style="font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">💡 네이버 검색창 검색어 자동 연동</span>
+        <button class="btn btn-secondary" id="keyword-current-tab-btn" style="width: auto; padding: 4px 9px; font-size: 11px; height: 26px; border-radius: 6px; white-space: nowrap; flex-shrink: 0;" title="현재 열려있는 네이버 검색 탭의 키워드를 가져옵니다">
+          🎯 현재 탭 검색어
+        </button>
+      </div>
+    </div>
+
+    <!-- Empty State -->
+    <div id="keyword-empty-state" class="card" style="text-align: center; padding: 22px 16px;">
+      <div style="font-size: 26px; margin-bottom: 8px;">🔍</div>
+      <div style="font-size: 13px; font-weight: 600; color: var(--text-main); margin-bottom: 4px;">네이버 실시간 QRA & 자동완성 추출</div>
+      <div style="font-size: 11px; color: var(--text-sub); line-height: 1.5;">
+        키워드를 입력하거나 [현재 탭 검색어]를 누르면,<br>
+        실시간 연관검색어(QRA)와 자동완성을 한 번에 분석합니다.
+      </div>
+    </div>
+
+    <!-- Results Section (Initially Hidden) -->
+    <div id="keyword-results-section" style="display: none;">
+      <!-- QRA Card -->
+      <div class="card card-compact" style="margin-bottom: 8px;">
+        <div class="card-title" style="margin-bottom: 4px;">
+          <span style="display: flex; align-items: center; gap: 5px; font-weight: 600; color: var(--text-main);">
+            <span style="color: #10b981;">🔥</span> 실시간 QRA 연관검색어
+          </span>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="badge badge-success" id="qra-count-badge" style="min-width: 32px;">0개</span>
+            <button class="btn btn-secondary" id="qra-copy-btn" style="padding: 2px 8px; font-size: 10.5px; height: 22px; width: auto; border-radius: 6px;">
+              복사
+            </button>
+          </div>
+        </div>
+        <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 6px;">네이버 모바일 '함께 많이 찾는 검색어' 실시간 수집 결과 (클릭 시 복사)</div>
+        <div class="keyword-chips-container" id="qra-chips-container"></div>
+      </div>
+
+      <!-- Autocomplete Card -->
+      <div class="card card-compact" style="margin-bottom: 8px;">
+        <div class="card-title" style="margin-bottom: 4px;">
+          <span style="display: flex; align-items: center; gap: 5px; font-weight: 600; color: var(--text-main);">
+            <span style="color: #03c75a;">⚡</span> 실시간 자동완성 키워드
+          </span>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="badge badge-success" id="ac-count-badge" style="min-width: 32px;">0개</span>
+            <button class="btn btn-secondary" id="ac-copy-btn" style="padding: 2px 8px; font-size: 10.5px; height: 22px; width: auto; border-radius: 6px;">
+              복사
+            </button>
+          </div>
+        </div>
+        <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 6px;">네이버 검색창 실시간 드롭다운 추천어 (클릭 시 복사)</div>
+        <div class="keyword-chips-container" id="ac-chips-container"></div>
+      </div>
+
+      <!-- GEMS One-Click Copy & Quick Actions Card -->
+      <div class="card card-compact" style="background: rgba(3, 199, 90, 0.04); border-color: rgba(3, 199, 90, 0.25);">
+        <div class="card-title" style="margin-bottom: 8px;">
+          <span style="color: var(--text-main); font-weight: 600;">💎 GEMS 원클릭 연동</span>
+          <span class="badge badge-success">원클릭 복사</span>
+        </div>
+        
+        <!-- Optional Experience / Fact Memo -->
+        <div style="margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label for="gems-user-memo" style="font-size: 11px; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 4px;">
+              <span>📝 내 방문 경험 / 메뉴 메모</span>
+              <span style="font-size: 10px; font-weight: normal; color: var(--text-muted);">(선택사항)</span>
+            </label>
+            <span style="font-size: 10px; color: var(--text-muted);">입력 시 프롬프트에 자동 반영</span>
+          </div>
+          <textarea id="gems-user-memo" class="keyword-input" rows="2" placeholder="예: 주문메뉴(텐붓카케우동, 토리텐 정식), 생활의 달인 방영, 주차 정보 등" style="width: 100%; resize: vertical; min-height: 44px; max-height: 120px; font-size: 11.5px; line-height: 1.4; padding: 6px 8px; border-radius: 6px; box-sizing: border-box;"></textarea>
+        </div>
+
+        <button class="btn btn-primary" id="gems-full-copy-btn" style="margin-bottom: 8px; padding: 10px; font-size: 12.5px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          <span>📋 GEMS 프롬프트용 일괄 복사</span>
+        </button>
+
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-secondary" id="open-top-blogs-btn" style="flex: 1; padding: 7px 8px; font-size: 11px; height: 32px;" title="상위 블로그 10개 탭을 열어 일괄 PDF 추출을 준비합니다">
+            📑 상위 블로그 10개 탭 열기
+          </button>
+          <button class="btn btn-secondary" id="open-gemini-btn" style="width: auto; padding: 7px 10px; font-size: 11px; height: 32px;">
+            🌐 Gemini 열기
+          </button>
+        </div>
+        
+        <div style="font-size: 10px; color: var(--text-sub); margin-top: 8px; line-height: 1.4; text-align: center;">
+          💡 복사 후 Gemini Gems에 <kbd style="background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px;">Ctrl+V</kbd>로 붙여넣으면 즉시 원고 구조가 생성됩니다.
+        </div>
       </div>
     </div>
   </div>

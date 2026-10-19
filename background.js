@@ -441,6 +441,21 @@ const singleFileInlinerFunction = async (tabIndexInfo = null, isBatch = false) =
   }
 };
 
+// Concurrency Limiter: at most 2 tabs can execute heavy Page.printToPDF concurrently across windows
+let activePrintLocks = 0;
+const MAX_CONCURRENT_PRINTS = 2;
+
+async function acquirePrintLock() {
+  while (activePrintLocks >= MAX_CONCURRENT_PRINTS) {
+    await new Promise(r => setTimeout(r, 80));
+  }
+  activePrintLocks++;
+}
+
+function releasePrintLock() {
+  activePrintLocks = Math.max(0, activePrintLocks - 1);
+}
+
 // Function to save a tab as PDF (with auto-conversion of Naver Blog PC -> Mobile in background, auto-scroll & lazy-load triggers)
 async function saveTabAsPdf(tab, options = {}) {
   if (!tab || !tab.id) return { success: false, message: '유효한 탭이 아닙니다.' };
@@ -742,70 +757,75 @@ async function saveTabAsPdf(tab, options = {}) {
   let pdfSaved = false;
 
   try {
-    await chrome.debugger.attach({ tabId: targetTabId }, '1.3');
-    const result = await chrome.debugger.sendCommand(
-      { tabId: targetTabId },
-      'Page.printToPDF',
-      {
-        printBackground: true,
-        paperWidth: 8.27,
-        paperHeight: 11.69,
-        marginTop: 0.3,
-        marginBottom: 0.3,
-        marginLeft: 0.3,
-        marginRight: 0.3,
-        preferCSSPageSize: false
-      }
-    );
-    await chrome.debugger.detach({ tabId: targetTabId });
+    await acquirePrintLock();
+    try {
+      await chrome.debugger.attach({ tabId: targetTabId }, '1.3');
+      const result = await chrome.debugger.sendCommand(
+        { tabId: targetTabId },
+        'Page.printToPDF',
+        {
+          printBackground: true,
+          paperWidth: 8.27,
+          paperHeight: 11.69,
+          marginTop: 0.3,
+          marginBottom: 0.3,
+          marginLeft: 0.3,
+          marginRight: 0.3,
+          preferCSSPageSize: false
+        }
+      );
+      await chrome.debugger.detach({ tabId: targetTabId });
 
-    if (result && result.data) {
-      const dataUrl = `data:application/pdf;base64,${result.data}`;
-      
-      let title = tab.title || 'webpage';
-      if (tempTabId) {
+      if (result && result.data) {
+        const dataUrl = `data:application/pdf;base64,${result.data}`;
+        
+        let title = tab.title || 'webpage';
+        if (tempTabId) {
+          try {
+            const freshTempTab = await chrome.tabs.get(tempTabId);
+            if (freshTempTab && freshTempTab.title) {
+              title = freshTempTab.title;
+            }
+          } catch (e) {}
+        }
+        
+        const sanitizeTitle = title.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '').substring(0, 35) || 'PDF_문서';
+        savedTitle = sanitizeTitle;
+
+        const today = new Date();
+        const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        const baseFilename = `${sanitizeTitle}_${dateStr}.pdf`;
+        finalFilename = baseFilename;
+
+        let usedSubfolder = options.subfolder || null;
+        if (options.isBatch && !usedSubfolder) {
+          usedSubfolder = sanitizeTitle;
+        }
+
+        if (usedSubfolder) {
+          const safeFolder = usedSubfolder.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '').substring(0, 40) || 'PDF_문서';
+          finalFilename = `${safeFolder}/${baseFilename}`;
+          savedFolder = safeFolder;
+        }
+
         try {
-          const freshTempTab = await chrome.tabs.get(tempTabId);
-          if (freshTempTab && freshTempTab.title) {
-            title = freshTempTab.title;
-          }
-        } catch (e) {}
+          await Promise.race([
+            chrome.downloads.download({
+              url: dataUrl,
+              filename: finalFilename,
+              saveAs: false
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Download trigger timeout')), 8000))
+          ]);
+        } catch (dlErr) {
+          console.warn('chrome.downloads.download warning/timeout:', dlErr);
+        }
+
+        showWebToast(tab.id, isConverted ? '📄 모바일 최적화 PDF 다운로드 시작!' : '📄 PDF 파일 다운로드 시작!');
+        pdfSaved = true;
       }
-      
-      const sanitizeTitle = title.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '').substring(0, 35) || 'PDF_문서';
-      savedTitle = sanitizeTitle;
-
-      const today = new Date();
-      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      const baseFilename = `${sanitizeTitle}_${dateStr}.pdf`;
-      finalFilename = baseFilename;
-
-      let usedSubfolder = options.subfolder || null;
-      if (options.isBatch && !usedSubfolder) {
-        usedSubfolder = sanitizeTitle;
-      }
-
-      if (usedSubfolder) {
-        const safeFolder = usedSubfolder.replace(/[\\/:*?"<>|]/g, '_').trim().replace(/[. ]+$/, '').substring(0, 40) || 'PDF_문서';
-        finalFilename = `${safeFolder}/${baseFilename}`;
-        savedFolder = safeFolder;
-      }
-
-      try {
-        await Promise.race([
-          chrome.downloads.download({
-            url: dataUrl,
-            filename: finalFilename,
-            saveAs: false
-          }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Download trigger timeout')), 8000))
-        ]);
-      } catch (dlErr) {
-        console.warn('chrome.downloads.download warning/timeout:', dlErr);
-      }
-
-      showWebToast(tab.id, isConverted ? '📄 모바일 최적화 PDF 다운로드 시작!' : '📄 PDF 파일 다운로드 시작!');
-      pdfSaved = true;
+    } finally {
+      releasePrintLock();
     }
   } catch (err) {
     console.warn('saveTabAsPdf debugger failed:', err);
@@ -1813,16 +1833,53 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
   }
 }
 
-// Global states for Batch PDF and Batch HTML processes
-let isBatchPdfCancelled = false;
-let batchPdfState = {
-  isRunning: false,
-  current: 0,
-  total: 0,
-  saved: 0,
-  title: '',
-  status: 'idle'
-};
+// Multi-Window State Management for Batch PDF processes (Map: windowId -> batchJob)
+const batchPdfJobs = new Map();
+
+function updateJobBadge(job, text, color) {
+  if (!job) return;
+  // 1. Set badge on all target tabs of this batch
+  if (Array.isArray(job.tabIds)) {
+    for (const tId of job.tabIds) {
+      chrome.action.setBadgeText({ text: text || '', tabId: tId }).catch(() => {});
+      if (color) {
+        chrome.action.setBadgeBackgroundColor({ color: color, tabId: tId }).catch(() => {});
+      }
+    }
+  }
+  // 2. Set badge on active tab of the window
+  if (job.windowId) {
+    chrome.tabs.query({ active: true, windowId: job.windowId }).then(([curActive]) => {
+      if (curActive && curActive.id) {
+        chrome.action.setBadgeText({ text: text || '', tabId: curActive.id }).catch(() => {});
+        if (color) {
+          chrome.action.setBadgeBackgroundColor({ color: color, tabId: curActive.id }).catch(() => {});
+        }
+      }
+    }).catch(() => {});
+  }
+}
+
+// When user switches active tab in a window running a batch job, refresh the badge on the new tab
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  const job = batchPdfJobs.get(activeInfo.windowId);
+  if (job && job.isRunning) {
+    const text = `${job.saved || 0}/${job.total || 0}`;
+    chrome.action.setBadgeText({ text, tabId: activeInfo.tabId }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: '#03C75A', tabId: activeInfo.tabId }).catch(() => {});
+  }
+});
+
+// Clean up jobs when a browser window is closed
+chrome.windows.onRemoved.addListener((closedWindowId) => {
+  const job = batchPdfJobs.get(closedWindowId);
+  if (job) {
+    job.isCancelled = true;
+    job.isRunning = false;
+    batchPdfJobs.delete(closedWindowId);
+  }
+  chrome.storage.local.remove(['batchPdfState_' + closedWindowId]).catch(() => {});
+});
 
 let isBatchHtmlCancelled = false;
 let batchHtmlState = {
@@ -1835,12 +1892,21 @@ let batchHtmlState = {
 };
 
 // Reset stale running states from storage on worker start
-chrome.storage.local.get(['batchPdfState', 'batchHtmlState']).then((data) => {
-  if (data?.batchPdfState?.isRunning) {
-    chrome.storage.local.set({ batchPdfState: { ...data.batchPdfState, isRunning: false, status: 'complete' } }).catch(() => {});
+chrome.storage.local.get(null).then((allData) => {
+  const keysToRemove = [];
+  for (const k in allData) {
+    if (k.startsWith('batchPdfState_')) {
+      keysToRemove.push(k);
+    }
   }
-  if (data?.batchHtmlState?.isRunning) {
-    chrome.storage.local.set({ batchHtmlState: { ...data.batchHtmlState, isRunning: false, status: 'complete' } }).catch(() => {});
+  if (allData?.batchPdfState?.isRunning) {
+    chrome.storage.local.set({ batchPdfState: { ...allData.batchPdfState, isRunning: false, status: 'complete' } }).catch(() => {});
+  }
+  if (keysToRemove.length > 0) {
+    chrome.storage.local.remove(keysToRemove).catch(() => {});
+  }
+  if (allData?.batchHtmlState?.isRunning) {
+    chrome.storage.local.set({ batchHtmlState: { ...allData.batchHtmlState, isRunning: false, status: 'complete' } }).catch(() => {});
   }
 }).catch(() => {});
 
@@ -1877,24 +1943,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // Batch Save PDF across multiple tabs (sequential processing with progress notifications & cancellation)
+  // Batch Save PDF across multiple tabs (per-window queue with progress notifications & cancellation)
   if (message.type === 'BATCH_SAVE_PDF_TABS') {
     (async () => {
       const tabIds = message.tabIds || [];
+      const windowId = message.windowId || null;
+      const winKey = windowId ? windowId : 'global';
       let successCount = 0;
-      isBatchPdfCancelled = false;
       let batchFolder = null;
 
+      // Check if already running in this window
+      const existingJob = batchPdfJobs.get(winKey);
+      if (existingJob && existingJob.isRunning) {
+        sendResponse({ success: false, message: '이 창에서 이미 PDF 일괄 저장이 진행 중입니다.' });
+        return;
+      }
+
+      const job = {
+        windowId: windowId,
+        tabIds: tabIds,
+        isCancelled: false,
+        isRunning: true,
+        current: 0,
+        total: tabIds.length,
+        saved: 0,
+        title: '',
+        folder: '',
+        status: 'processing'
+      };
+      batchPdfJobs.set(winKey, job);
+
       try {
-        batchPdfState = {
-          isRunning: true,
-          current: 0,
-          total: tabIds.length,
-          saved: 0,
-          title: '',
-          folder: '',
-          status: 'processing'
-        };
-        await chrome.storage.local.set({ batchPdfState }).catch(() => {});
+        const initialStorage = { batchPdfState: job };
+        if (windowId) initialStorage['batchPdfState_' + windowId] = job;
+        await chrome.storage.local.set(initialStorage).catch(() => {});
+
+        // Set extension badge on tabs in this window
+        updateJobBadge(job, `0/${tabIds.length}`, '#03C75A');
 
         // Find first valid tab to determine batch folder name in advance
         for (const tId of tabIds) {
@@ -1909,11 +1994,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!batchFolder) {
           batchFolder = 'PDF_모음';
         }
-        batchPdfState.folder = batchFolder;
-        await chrome.storage.local.set({ batchPdfState }).catch(() => {});
+        job.folder = batchFolder;
+        const folderStorage = { batchPdfState: job };
+        if (windowId) folderStorage['batchPdfState_' + windowId] = job;
+        await chrome.storage.local.set(folderStorage).catch(() => {});
 
         for (let i = 0; i < tabIds.length; i++) {
-          if (isBatchPdfCancelled) {
+          if (job.isCancelled) {
             break;
           }
 
@@ -1927,15 +2014,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             continue;
           }
 
-          batchPdfState.current = i + 1;
-          batchPdfState.title = tab.title || '페이지';
-          batchPdfState.status = 'processing';
-          chrome.storage.local.set({ batchPdfState }).catch(() => {});
+          job.current = i + 1;
+          job.title = tab.title || '페이지';
+          job.status = 'processing';
+          job.saved = successCount;
+          
+          const loopStorage = { batchPdfState: job };
+          if (windowId) loopStorage['batchPdfState_' + windowId] = job;
+          chrome.storage.local.set(loopStorage).catch(() => {});
 
-          // Broadcast start of current tab
+          // Update badge text for this window
+          updateJobBadge(job, `${successCount}/${tabIds.length}`, '#03C75A');
+
+          // Display progress toast on currently active user tab in this window
+          try {
+            const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
+            const [curActiveTab] = await chrome.tabs.query(q);
+            if (curActiveTab && curActiveTab.id) {
+              showWebToast(curActiveTab.id, `⏳ [${i + 1}/${tabIds.length}] PDF 생성 중: ${tab.title || ''}`);
+            }
+          } catch (e) {}
+
+          // Broadcast start of current tab (with windowId)
           chrome.runtime.sendMessage({
             type: 'BATCH_SAVE_PDF_PROGRESS',
+            windowId: windowId,
             current: i + 1,
+            saved: successCount,
             total: tabIds.length,
             title: tab.title || '페이지',
             folder: batchFolder,
@@ -1952,29 +2057,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             if (res && res.success) {
               successCount++;
-              batchPdfState.saved = successCount;
-              batchPdfState.status = 'downloaded';
-              chrome.storage.local.set({ batchPdfState }).catch(() => {});
+              job.saved = successCount;
+              job.status = 'downloaded';
+              const dlStorage = { batchPdfState: job };
+              if (windowId) dlStorage['batchPdfState_' + windowId] = job;
+              chrome.storage.local.set(dlStorage).catch(() => {});
+
+              // Update badge text with completed count
+              updateJobBadge(job, `${successCount}/${tabIds.length}`, '#03C75A');
+
+              // Display success toast on currently active user tab in this window
+              try {
+                const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
+                const [curActiveTab] = await chrome.tabs.query(q);
+                if (curActiveTab && curActiveTab.id) {
+                  showWebToast(curActiveTab.id, `📄 [${successCount}/${tabIds.length}] PDF 저장 완료: ${tab.title || ''}`);
+                }
+              } catch (e) {}
             }
           } catch (err) {
             console.error(`Batch PDF tab ${tabId} failed or timed out:`, err);
           }
 
-          if (isBatchPdfCancelled) {
+          if (job.isCancelled) {
             break;
           }
 
-          // Broadcast finished for this tab
+          // Broadcast finished for this tab (with windowId)
           chrome.runtime.sendMessage({
             type: 'BATCH_SAVE_PDF_PROGRESS',
+            windowId: windowId,
             current: i + 1,
+            saved: successCount,
             total: tabIds.length,
             title: tab.title || '페이지',
             folder: batchFolder || '',
             status: 'downloaded'
           }).catch(() => {});
 
-          // Minimal settle delay between tabs (reduced from 1000ms to 120ms for fast batch processing)
+          // Minimal settle delay between tabs
           if (i < tabIds.length - 1) {
             await new Promise(r => setTimeout(r, 120));
           }
@@ -1982,22 +2103,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (fatalErr) {
         console.error('Fatal error in BATCH_SAVE_PDF_TABS:', fatalErr);
       } finally {
-        // ALWAYS ensure running state is turned off and storage is updated
-        batchPdfState.isRunning = false;
-        batchPdfState.status = isBatchPdfCancelled ? 'cancelled' : 'complete';
-        batchPdfState.saved = successCount;
-        await chrome.storage.local.set({ batchPdfState }).catch(() => {});
+        job.isRunning = false;
+        job.status = job.isCancelled ? 'cancelled' : 'complete';
+        job.saved = successCount;
+        batchPdfJobs.delete(winKey);
 
-        if (isBatchPdfCancelled) {
+        const finStorage = {
+          batchPdfState: job,
+          lastBatchPdfResult: {
+            success: !job.isCancelled,
+            windowId: windowId,
+            total: tabIds.length,
+            saved: successCount,
+            folder: batchFolder || '',
+            timestamp: Date.now()
+          }
+        };
+        if (windowId) finStorage['batchPdfState_' + windowId] = job;
+        await chrome.storage.local.set(finStorage).catch(() => {});
+
+        // Toolbar Badge final state for this window
+        if (job.isCancelled) {
+          updateJobBadge(job, '중지', '#EF4444');
+          setTimeout(() => { updateJobBadge(job, '', null); }, 4000);
+        } else {
+          updateJobBadge(job, `${successCount}`, '#10B981');
+          setTimeout(() => { updateJobBadge(job, '', null); }, 6000);
+        }
+
+        setTimeout(() => {
+          if (windowId) {
+            chrome.storage.local.remove(['batchPdfState_' + windowId]).catch(() => {});
+          }
+        }, 5000);
+
+        if (job.isCancelled) {
           chrome.runtime.sendMessage({
             type: 'BATCH_SAVE_PDF_CANCELLED',
+            windowId: windowId,
             total: tabIds.length,
             saved: successCount,
             folder: batchFolder || ''
           }).catch(() => {});
 
           try {
-            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
+            const [activeTab] = await chrome.tabs.query(q);
             if (activeTab && activeTab.id) {
               const cancelMsg = batchFolder 
                 ? `⏹️ '${batchFolder}' 폴더에 ${successCount}/${tabIds.length}개 저장 후 중지되었습니다.`
@@ -2008,17 +2159,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           sendResponse({ success: false, cancelled: true, total: tabIds.length, saved: successCount, folder: batchFolder });
         } else {
-          // Broadcast all tabs complete
           chrome.runtime.sendMessage({
             type: 'BATCH_SAVE_PDF_COMPLETE',
+            windowId: windowId,
             total: tabIds.length,
             saved: successCount,
             folder: batchFolder || ''
           }).catch(() => {});
 
-          // Notify active tab with toast
           try {
-            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
+            const [activeTab] = await chrome.tabs.query(q);
             if (activeTab && activeTab.id) {
               const completeMsg = batchFolder 
                 ? `🎉 '${batchFolder}' 폴더에 총 ${successCount}개 탭 PDF 저장 완료!`
@@ -2034,19 +2185,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Cancel Batch PDF Handler
+  // Cancel Batch PDF Handler (per-window)
   if (message.type === 'CANCEL_BATCH_PDF') {
-    isBatchPdfCancelled = true;
-    batchPdfState.isRunning = false;
-    batchPdfState.status = 'cancelled';
-    chrome.storage.local.set({ batchPdfState }).catch(() => {});
+    const winKey = message.windowId ? message.windowId : 'global';
+    const job = batchPdfJobs.get(winKey) || batchPdfJobs.get('global');
+    if (job) {
+      job.isCancelled = true;
+      job.isRunning = false;
+      job.status = 'cancelled';
+      updateJobBadge(job, '중지', '#EF4444');
+      setTimeout(() => { updateJobBadge(job, '', null); }, 3000);
+      const cStorage = { batchPdfState: job };
+      if (job.windowId) cStorage['batchPdfState_' + job.windowId] = job;
+      chrome.storage.local.set(cStorage).catch(() => {});
+    }
     sendResponse({ success: true });
     return true;
   }
 
-  // Query Batch PDF Status Handler
+  // Query Batch PDF Status Handler (per-window)
   if (message.type === 'GET_BATCH_PDF_STATUS') {
-    sendResponse(batchPdfState);
+    const winKey = message.windowId ? message.windowId : 'global';
+    const job = batchPdfJobs.get(winKey);
+    if (job && job.isRunning) {
+      sendResponse(job);
+    } else if (!message.windowId && batchPdfJobs.size > 0) {
+      const firstJob = batchPdfJobs.values().next().value;
+      sendResponse(firstJob);
+    } else {
+      sendResponse({ isRunning: false, status: 'idle' });
+    }
     return true;
   }
 
