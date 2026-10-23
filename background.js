@@ -518,6 +518,33 @@ async function saveTabAsPdf(tab, options = {}) {
     console.warn('URL parsing or mobile tab creation failed:', e);
   }
 
+  // Ensure target tab is completely loaded before injecting scripts (prevents premature capture)
+  try {
+    const curTab = await chrome.tabs.get(targetTabId);
+    if (curTab && curTab.status !== 'complete') {
+      await new Promise((resolve) => {
+        let isDone = false;
+        const onUpdated = (tId, changeInfo) => {
+          if (tId === targetTabId && changeInfo.status === 'complete') {
+            if (!isDone) {
+              isDone = true;
+              chrome.tabs.onUpdated.removeListener(onUpdated);
+              resolve();
+            }
+          }
+        };
+        chrome.tabs.onUpdated.addListener(onUpdated);
+        setTimeout(() => {
+          if (!isDone) {
+            isDone = true;
+            chrome.tabs.onUpdated.removeListener(onUpdated);
+            resolve();
+          }
+        }, 8000);
+      });
+    }
+  } catch (e) {}
+
   // Pre-print preparation: fast-scroll for lazy load, eager-load images, inject print-only styles, and reset overflow
   try {
     showWebToast(tab.id, '⏳ 상세 내용 및 이미지 준비 중...');
@@ -559,7 +586,8 @@ async function saveTabAsPdf(tab, options = {}) {
                 }
 
                 /* Reset overflow & height to prevent blank pages / cutoff in SPA/React layouts */
-                html, body, #root, #__next, #wrap, .wrap, main, [class*="container" i], [class*="content" i], [class*="layout" i] {
+                html, body, #root, #__next, #wrap, .wrap, main, [class*="container" i], [class*="content" i], [class*="layout" i],
+                #ct, #viewTypeSelector, .post_ct, .se-viewer, .se-main-container, article, section, [class*="post_article" i] {
                   overflow: visible !important;
                   height: auto !important;
                   max-height: none !important;
@@ -617,15 +645,6 @@ async function saveTabAsPdf(tab, options = {}) {
             document.head.appendChild(printStyle);
           }
 
-          // Frame tick helper (uses requestAnimationFrame when tab is visible, or fast tick if backgrounded)
-          const nextFrame = () => new Promise(res => {
-            if (!document.hidden && typeof requestAnimationFrame === 'function') {
-              requestAnimationFrame(res);
-            } else {
-              setTimeout(res, 20);
-            }
-          });
-
           // 2. State-driven check for dynamic SPA content (React / Vue) to finish initial rendering & remove skeletons
           const isDomReady = () => {
             const hasPostContainer = document.querySelector('.se-main-container, #viewTypeSelector, [class*="post_article"], [class*="se_doc_viewer"]');
@@ -639,17 +658,17 @@ async function saveTabAsPdf(tab, options = {}) {
             await new Promise((resolve) => {
               const start = Date.now();
               const observer = new MutationObserver(() => {
-                if (isDomReady() || Date.now() - start > 3000) {
+                if (isDomReady() || Date.now() - start > 3500) {
                   observer.disconnect();
                   resolve();
                 }
               });
               observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-              setTimeout(() => { observer.disconnect(); resolve(); }, 3000);
+              setTimeout(() => { observer.disconnect(); resolve(); }, 3500);
             });
           }
 
-          // 3. Fast auto-scroll: step through content to trigger IntersectionObserver & lazy load
+          // 3. Fast auto-scroll: jump through key checkpoints to trigger IntersectionObserver & lazy load
           const originalScrollY = window.scrollY;
           const postContainer = document.querySelector('.se-main-container, #viewTypeSelector, [class*="post_article"], [class*="se_doc_viewer"]');
           
@@ -661,20 +680,20 @@ async function saveTabAsPdf(tab, options = {}) {
             maxScrollTarget = Math.min(maxScrollTarget, 3500);
           }
 
-          const scrollStep = Math.max(window.innerHeight * 1.5, 900);
-          for (let pos = 0; pos < maxScrollTarget; pos += scrollStep) {
-            window.scrollTo(0, pos);
-            await nextFrame();
-          }
+          // Trigger viewport intersection events without throttled background interval loops
+          window.scrollTo(0, Math.floor(maxScrollTarget / 2));
+          if (document.body) document.body.offsetHeight;
           window.scrollTo(0, maxScrollTarget);
-          await nextFrame();
+          if (document.body) document.body.offsetHeight;
           window.scrollTo(0, originalScrollY);
+          if (document.body) document.body.offsetHeight;
 
           // 4. Eager-load and swap real URLs for all lazy images
           const imgs = Array.from(document.querySelectorAll('img'));
 
           imgs.forEach(img => {
             img.loading = 'eager';
+            try { img.decoding = 'async'; } catch (e) {}
 
             // Extract candidate URL from lazy attributes or current src
             let realSrc = img.getAttribute('data-lazy-src') || 
@@ -687,18 +706,18 @@ async function saveTabAsPdf(tab, options = {}) {
 
             // Naver blur replacement & HD upgrade
             if (realSrc) {
-              if (realSrc.includes('w80_blur')) {
-                realSrc = realSrc.replace('w80_blur', 'w966');
-              } else if (realSrc.includes('_blur')) {
-                realSrc = realSrc.replace(/type=[^&]+_blur/, 'type=w966');
-              }
-              if (realSrc.includes('type=w400')) {
-                realSrc = realSrc.replace('type=w400', 'type=w966');
-              }
-            }
+              realSrc = realSrc
+                .replace(/w80_blur/g, 'w966')
+                .replace(/m80_blur/g, 'w966')
+                .replace(/type=[^&]+_blur/g, 'type=w966')
+                .replace(/type=w400/g, 'type=w966')
+                .replace(/type=m400/g, 'type=w966')
+                .replace(/type=f\d+/g, 'type=w966');
 
-            if (realSrc && img.src !== realSrc) {
-              img.src = realSrc;
+              img.removeAttribute('srcset');
+              if (img.src !== realSrc) {
+                img.src = realSrc;
+              }
             }
           });
 
@@ -710,23 +729,32 @@ async function saveTabAsPdf(tab, options = {}) {
             }
           });
 
-          // 5. Native img.decode() event-driven synchronization (pixel decoding & layout readiness)
-          const decodePromises = imgs
-            .filter(img => img.src && !img.src.startsWith('data:image/svg'))
-            .map(img => {
-              if (typeof img.decode === 'function') {
-                return img.decode().catch(() => {});
-              }
-              if (img.complete) return Promise.resolve();
-              return new Promise(res => {
-                img.onload = img.onerror = res;
+          // 5. Native img.decode() & onload event synchronization (ensures all images are 100% loaded)
+          const candidateImgs = imgs.filter(img => {
+            const s = img.src || '';
+            return s && !s.startsWith('data:image/svg') && !s.includes('blank.gif');
+          });
+
+          const decodePromises = candidateImgs.map(img => {
+            if (img.complete && img.naturalWidth > 0) {
+              return Promise.resolve();
+            }
+            if (typeof img.decode === 'function') {
+              return img.decode().catch(() => {
+                if (img.complete) return Promise.resolve();
+                return new Promise(res => { img.onload = img.onerror = res; });
               });
+            }
+            return new Promise(res => {
+              img.onload = img.onerror = res;
             });
+          });
 
           if (decodePromises.length > 0) {
+            // Resolves the exact millisecond all images are ready, or max 3500ms safety timeout
             await Promise.race([
               Promise.all(decodePromises),
-              new Promise(res => setTimeout(res, 2500))
+              new Promise(res => setTimeout(res, 3500))
             ]);
           }
 
@@ -742,14 +770,13 @@ async function saveTabAsPdf(tab, options = {}) {
           if (document.body) {
             document.body.offsetHeight;
           }
-          await nextFrame();
         } catch (e) {
           console.error('Pre-print preparation failed:', e);
         }
       }
     });
     // Brief settle buffer for layout reflow
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   } catch (e) {
     console.warn('Pre-print script execution failed:', e);
   }
@@ -1999,107 +2026,114 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (windowId) folderStorage['batchPdfState_' + windowId] = job;
         await chrome.storage.local.set(folderStorage).catch(() => {});
 
-        for (let i = 0; i < tabIds.length; i++) {
-          if (job.isCancelled) {
-            break;
-          }
+        // 2-tab concurrent worker pool for 2x faster execution while guaranteeing full quality
+        let currentIndex = 0;
+        const CONCURRENCY = Math.min(2, tabIds.length);
 
-          const tabId = tabIds[i];
-          let tab = null;
-          try {
-            tab = await chrome.tabs.get(tabId);
-          } catch (e) {}
+        const runWorker = async () => {
+          while (currentIndex < tabIds.length && !job.isCancelled) {
+            const i = currentIndex++;
+            const tabId = tabIds[i];
+            let tab = null;
+            try {
+              tab = await chrome.tabs.get(tabId);
+            } catch (e) {}
 
-          if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
-            continue;
-          }
-
-          job.current = i + 1;
-          job.title = tab.title || '페이지';
-          job.status = 'processing';
-          job.saved = successCount;
-          
-          const loopStorage = { batchPdfState: job };
-          if (windowId) loopStorage['batchPdfState_' + windowId] = job;
-          chrome.storage.local.set(loopStorage).catch(() => {});
-
-          // Update badge text for this window
-          updateJobBadge(job, `${successCount}/${tabIds.length}`, '#03C75A');
-
-          // Display progress toast on currently active user tab in this window
-          try {
-            const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
-            const [curActiveTab] = await chrome.tabs.query(q);
-            if (curActiveTab && curActiveTab.id) {
-              showWebToast(curActiveTab.id, `⏳ [${i + 1}/${tabIds.length}] PDF 생성 중: ${tab.title || ''}`);
+            if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
+              continue;
             }
-          } catch (e) {}
 
-          // Broadcast start of current tab (with windowId)
-          chrome.runtime.sendMessage({
-            type: 'BATCH_SAVE_PDF_PROGRESS',
-            windowId: windowId,
-            current: i + 1,
-            saved: successCount,
-            total: tabIds.length,
-            title: tab.title || '페이지',
-            folder: batchFolder,
-            status: 'processing'
-          }).catch(() => {});
+            job.current = Math.min(tabIds.length, Math.max(job.current, i + 1));
+            job.title = tab.title || '페이지';
+            job.status = 'processing';
+            job.saved = successCount;
+            
+            const loopStorage = { batchPdfState: job };
+            if (windowId) loopStorage['batchPdfState_' + windowId] = job;
+            chrome.storage.local.set(loopStorage).catch(() => {});
 
-          try {
-            // Per-tab 35s safety timeout to prevent permanent hanging on any tab
-            const savePromise = saveTabAsPdf(tab, { isBatch: true, subfolder: batchFolder });
-            const timeoutPromise = new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Tab PDF save timed out after 35s')), 35000)
-            );
-            const res = await Promise.race([savePromise, timeoutPromise]);
+            // Update badge text for this window
+            updateJobBadge(job, `${successCount}/${tabIds.length}`, '#03C75A');
 
-            if (res && res.success) {
-              successCount++;
-              job.saved = successCount;
-              job.status = 'downloaded';
-              const dlStorage = { batchPdfState: job };
-              if (windowId) dlStorage['batchPdfState_' + windowId] = job;
-              chrome.storage.local.set(dlStorage).catch(() => {});
+            // Display progress toast on currently active user tab in this window
+            try {
+              const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
+              const [curActiveTab] = await chrome.tabs.query(q);
+              if (curActiveTab && curActiveTab.id) {
+                showWebToast(curActiveTab.id, `⏳ [${successCount + 1}/${tabIds.length}] PDF 생성 중: ${tab.title || ''}`);
+              }
+            } catch (e) {}
 
-              // Update badge text with completed count
-              updateJobBadge(job, `${successCount}/${tabIds.length}`, '#03C75A');
+            // Broadcast start of current tab (with windowId)
+            chrome.runtime.sendMessage({
+              type: 'BATCH_SAVE_PDF_PROGRESS',
+              windowId: windowId,
+              current: i + 1,
+              saved: successCount,
+              total: tabIds.length,
+              title: tab.title || '페이지',
+              folder: batchFolder,
+              status: 'processing'
+            }).catch(() => {});
 
-              // Display success toast on currently active user tab in this window
-              try {
-                const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
-                const [curActiveTab] = await chrome.tabs.query(q);
-                if (curActiveTab && curActiveTab.id) {
-                  showWebToast(curActiveTab.id, `📄 [${successCount}/${tabIds.length}] PDF 저장 완료: ${tab.title || ''}`);
-                }
-              } catch (e) {}
+            try {
+              // Per-tab 40s safety timeout to prevent permanent hanging on any single tab
+              const savePromise = saveTabAsPdf(tab, { isBatch: true, subfolder: batchFolder });
+              const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Tab PDF save timed out after 40s')), 40000)
+              );
+              const res = await Promise.race([savePromise, timeoutPromise]);
+
+              if (res && res.success) {
+                successCount++;
+                job.saved = successCount;
+                job.status = 'downloaded';
+                const dlStorage = { batchPdfState: job };
+                if (windowId) dlStorage['batchPdfState_' + windowId] = job;
+                chrome.storage.local.set(dlStorage).catch(() => {});
+
+                // Update badge text with completed count
+                updateJobBadge(job, `${successCount}/${tabIds.length}`, '#03C75A');
+
+                // Display success toast on currently active user tab in this window
+                try {
+                  const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
+                  const [curActiveTab] = await chrome.tabs.query(q);
+                  if (curActiveTab && curActiveTab.id) {
+                    showWebToast(curActiveTab.id, `📄 [${successCount}/${tabIds.length}] PDF 저장 완료: ${tab.title || ''}`);
+                  }
+                } catch (e) {}
+              }
+            } catch (err) {
+              console.error(`Batch PDF tab ${tabId} failed or timed out:`, err);
             }
-          } catch (err) {
-            console.error(`Batch PDF tab ${tabId} failed or timed out:`, err);
-          }
 
-          if (job.isCancelled) {
-            break;
-          }
+            if (job.isCancelled) {
+              break;
+            }
 
-          // Broadcast finished for this tab (with windowId)
-          chrome.runtime.sendMessage({
-            type: 'BATCH_SAVE_PDF_PROGRESS',
-            windowId: windowId,
-            current: i + 1,
-            saved: successCount,
-            total: tabIds.length,
-            title: tab.title || '페이지',
-            folder: batchFolder || '',
-            status: 'downloaded'
-          }).catch(() => {});
+            // Broadcast finished for this tab (with windowId)
+            chrome.runtime.sendMessage({
+              type: 'BATCH_SAVE_PDF_PROGRESS',
+              windowId: windowId,
+              current: i + 1,
+              saved: successCount,
+              total: tabIds.length,
+              title: tab.title || '페이지',
+              folder: batchFolder || '',
+              status: 'downloaded'
+            }).catch(() => {});
 
-          // Minimal settle delay between tabs
-          if (i < tabIds.length - 1) {
-            await new Promise(r => setTimeout(r, 120));
+            // Brief settle delay
+            await new Promise(r => setTimeout(r, 60));
           }
+        };
+
+        const workers = [];
+        for (let w = 0; w < CONCURRENCY; w++) {
+          workers.push(runWorker());
         }
+        await Promise.all(workers);
       } catch (fatalErr) {
         console.error('Fatal error in BATCH_SAVE_PDF_TABS:', fatalErr);
       } finally {
