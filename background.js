@@ -1,4 +1,14 @@
-// Naver Blog Exporter - Background Service Worker (Manifest V3)
+// Safely broadcasts a message to extension views (popup, options, etc.)
+// Prevents "Unchecked runtime.lastError: Could not establish connection. Receiving end does not exist." when popup is closed
+function safeBroadcastMessage(message) {
+  try {
+    chrome.runtime.sendMessage(message, () => {
+      if (chrome.runtime.lastError) {
+        // Intentionally consumed: expected when popup is closed
+      }
+    });
+  } catch (e) {}
+}
 
 // Helper to check if URL is Naver Mobile or PC Blog
 function isNaverBlogUrl(url) {
@@ -1553,21 +1563,23 @@ let autoCommentState = {
 async function broadcastAutoCommentState(stateUpdate) {
   autoCommentState = { ...autoCommentState, ...stateUpdate };
   await chrome.storage.local.set({ autoCommentState });
-  try {
-    chrome.runtime.sendMessage({
-      type: 'AUTO_COMMENT_STATE_UPDATE',
-      state: autoCommentState
-    }).catch(() => {});
-  } catch (e) {}
+  safeBroadcastMessage({
+    type: 'AUTO_COMMENT_STATE_UPDATE',
+    state: autoCommentState
+  });
 }
 
-function stopAutoCommentTask() {
-  if (autoCommentState.isRunning) {
-    autoCommentAbortRequested = true;
-  }
+async function stopAutoCommentTask() {
+  autoCommentAbortRequested = true;
+  await broadcastAutoCommentState({
+    isRunning: false,
+    statusText: '작업이 중지되었습니다.',
+    statusColor: 'var(--danger)',
+    finished: true
+  });
 }
 
-async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
+async function runAutoCommentTask({ commentsList, autoSubmit, delaySec, windowId }) {
   if (autoCommentState.isRunning) return;
 
   autoCommentAbortRequested = false;
@@ -1584,10 +1596,12 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
   });
 
   try {
-    const cafeTabs = await chrome.tabs.query({
-      url: ["*://cafe.naver.com/*"],
-      currentWindow: true
-    });
+    let cafeTabs;
+    if (windowId) {
+      cafeTabs = await chrome.tabs.query({ url: ["*://cafe.naver.com/*"], windowId });
+    } else {
+      cafeTabs = await chrome.tabs.query({ url: ["*://cafe.naver.com/*"] });
+    }
 
     const validCafeTabs = cafeTabs.filter(tab => {
       if (!tab.url) return false;
@@ -1784,7 +1798,7 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
       // Keep-Alive chunked sleep with live countdown (supports 50s, 60s, or any long delays)
       if (i < totalToProcess - 1) {
         const totalDelaySec = wasSkipped ? 1 : Math.max(1, Math.round(delaySec || 5));
-        
+
         for (let s = totalDelaySec; s > 0; s--) {
           if (autoCommentAbortRequested) break;
 
@@ -1802,6 +1816,10 @@ async function runAutoCommentTask({ commentsList, autoSubmit, delaySec }) {
           if (s % 5 === 0) {
             try { 
               await chrome.runtime.getPlatformInfo(); 
+              await chrome.storage.local.get('autoCommentState');
+              if (tab && tab.id) {
+                await chrome.tabs.get(tab.id).catch(() => null);
+              }
             } catch (e) {}
           }
         }
@@ -1935,6 +1953,9 @@ chrome.storage.local.get(null).then((allData) => {
   if (allData?.batchHtmlState?.isRunning) {
     chrome.storage.local.set({ batchHtmlState: { ...allData.batchHtmlState, isRunning: false, status: 'complete' } }).catch(() => {});
   }
+  if (allData?.autoCommentState?.isRunning && !autoCommentState.isRunning) {
+    chrome.storage.local.set({ autoCommentState: { ...allData.autoCommentState, isRunning: false, statusText: '이전 작업 종료됨', finished: true } }).catch(() => {});
+  }
 }).catch(() => {});
 
 // Runtime message listener
@@ -1945,8 +1966,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === 'STOP_AUTO_COMMENT') {
-    stopAutoCommentTask();
-    sendResponse({ stopped: true });
+    (async () => {
+      await stopAutoCommentTask();
+      sendResponse({ stopped: true });
+    })();
     return true;
   }
   if (message.type === 'GET_AUTO_COMMENT_STATE') {
@@ -2065,7 +2088,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             } catch (e) {}
 
             // Broadcast start of current tab (with windowId)
-            chrome.runtime.sendMessage({
+            safeBroadcastMessage({
               type: 'BATCH_SAVE_PDF_PROGRESS',
               windowId: windowId,
               current: i + 1,
@@ -2074,7 +2097,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               title: tab.title || '페이지',
               folder: batchFolder,
               status: 'processing'
-            }).catch(() => {});
+            });
 
             try {
               // Per-tab 40s safety timeout to prevent permanent hanging on any single tab
@@ -2113,7 +2136,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             // Broadcast finished for this tab (with windowId)
-            chrome.runtime.sendMessage({
+            safeBroadcastMessage({
               type: 'BATCH_SAVE_PDF_PROGRESS',
               windowId: windowId,
               current: i + 1,
@@ -2122,7 +2145,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               title: tab.title || '페이지',
               folder: batchFolder || '',
               status: 'downloaded'
-            }).catch(() => {});
+            });
 
             // Brief settle delay
             await new Promise(r => setTimeout(r, 60));
@@ -2172,13 +2195,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }, 5000);
 
         if (job.isCancelled) {
-          chrome.runtime.sendMessage({
+          safeBroadcastMessage({
             type: 'BATCH_SAVE_PDF_CANCELLED',
             windowId: windowId,
             total: tabIds.length,
             saved: successCount,
             folder: batchFolder || ''
-          }).catch(() => {});
+          });
 
           try {
             const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
@@ -2193,13 +2216,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           sendResponse({ success: false, cancelled: true, total: tabIds.length, saved: successCount, folder: batchFolder });
         } else {
-          chrome.runtime.sendMessage({
+          safeBroadcastMessage({
             type: 'BATCH_SAVE_PDF_COMPLETE',
             windowId: windowId,
             total: tabIds.length,
             saved: successCount,
             folder: batchFolder || ''
-          }).catch(() => {});
+          });
 
           try {
             const q = windowId ? { active: true, windowId: windowId } : { active: true, currentWindow: true };
@@ -2331,13 +2354,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.storage.local.set({ batchHtmlState }).catch(() => {});
 
         // Broadcast start of current tab
-        chrome.runtime.sendMessage({
+        safeBroadcastMessage({
           type: 'BATCH_SAVE_HTML_PROGRESS',
           current: i + 1,
           total: tabIds.length,
           title: tabTitle,
           status: 'processing'
-        }).catch(() => {});
+        });
 
         try {
           // Execute inliner inside tab and get complete HTML string
@@ -2379,13 +2402,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             chrome.storage.local.set({ batchHtmlState }).catch(() => {});
 
             // Broadcast download complete for this tab
-            chrome.runtime.sendMessage({
+            safeBroadcastMessage({
               type: 'BATCH_SAVE_HTML_PROGRESS',
               current: i + 1,
               total: tabIds.length,
               title: res.title || tabTitle,
               status: 'downloaded'
-            }).catch(() => {});
+            });
           }
 
           // Short delay between tabs to prevent browser congestion
@@ -2405,11 +2428,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await chrome.storage.local.set({ batchHtmlState }).catch(() => {});
 
       if (isBatchHtmlCancelled) {
-        chrome.runtime.sendMessage({
+        safeBroadcastMessage({
           type: 'BATCH_SAVE_HTML_CANCELLED',
           total: tabIds.length,
           saved: successCount
-        }).catch(() => {});
+        });
 
         try {
           const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -2423,11 +2446,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       // Broadcast all tabs complete
-      chrome.runtime.sendMessage({
+      safeBroadcastMessage({
         type: 'BATCH_SAVE_HTML_COMPLETE',
         total: tabIds.length,
         saved: successCount
-      }).catch(() => {});
+      });
 
       sendResponse({ success: true, total: tabIds.length, saved: successCount });
     })();
@@ -2524,10 +2547,10 @@ async function autoWriteNaverBlogWithCdp(tabId, { blogData, authorText, autoSave
       detail
     };
     chrome.storage.local.set({ blogWriteState: stateObj });
-    chrome.runtime.sendMessage({
+    safeBroadcastMessage({
       type: 'AUTO_WRITE_BLOG_PROGRESS',
       ...stateObj
-    }).catch(() => {});
+    });
   }
 
   const isFast = speed === 'fast';

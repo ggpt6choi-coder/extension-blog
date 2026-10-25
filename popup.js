@@ -147,6 +147,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   let detectedCafeTabsCount = 0;
   let parsedComments = {};
   let currentTab = null;
+  let isPdfRunning = false;
+  let isHtmlRunning = false;
 
   // Function to show toast message
   function showToast(message, isError = false) {
@@ -443,8 +445,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize
   try {
     // 0. Immediate Fast-Path State Sync (0ms delay from local storage & background worker)
-    let isPdfRunning = false;
-    let isHtmlRunning = false;
+    isPdfRunning = false;
+    isHtmlRunning = false;
 
     try {
       const winPdfKey = currentWindowId ? 'batchPdfState_' + currentWindowId : 'batchPdfState';
@@ -2602,6 +2604,12 @@ ${res.content}`;
     // Restore running status if background task is active
     if (res.autoCommentState) {
       applyAutoCommentUIState(res.autoCommentState);
+      chrome.runtime.sendMessage({ type: 'GET_AUTO_COMMENT_STATE' }, (resp) => {
+        if (chrome.runtime.lastError) return;
+        if (resp && resp.state && !resp.state.isRunning && res.autoCommentState.isRunning) {
+          applyAutoCommentUIState(resp.state);
+        }
+      });
     }
   });
 
@@ -2657,7 +2665,13 @@ ${res.content}`;
         if (chrome.runtime.lastError) {
           console.error('Failed to send stop message:', chrome.runtime.lastError);
         }
-        showToast('⏹️ 댓글 자동 입력 중지를 요청했습니다.');
+        showToast('⏹️ 댓글 자동 입력이 중지되었습니다.');
+        applyAutoCommentUIState({
+          isRunning: false,
+          statusText: '작업이 중지되었습니다.',
+          statusColor: 'var(--danger)',
+          finished: true
+        });
       });
       return;
     }
@@ -2687,7 +2701,8 @@ ${res.content}`;
       payload: {
         commentsList,
         autoSubmit,
-        delaySec
+        delaySec,
+        windowId: currentWindowId
       }
     }, (response) => {
       if (chrome.runtime.lastError) {
