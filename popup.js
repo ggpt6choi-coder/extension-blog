@@ -3784,7 +3784,7 @@ ${acText}${memoSection}
 
       const origHtml = geminiSkillCopyBtn.innerHTML;
       geminiSkillCopyBtn.disabled = true;
-      geminiSkillCopyBtn.innerHTML = '<span>⏳ 동기화 중...</span>';
+      geminiSkillCopyBtn.innerHTML = '<span>⏳...</span>';
 
       try {
         let markdownText = '';
@@ -3823,7 +3823,7 @@ ${acText}${memoSection}
         if (success) {
           const syncLabel = isRemoteSynced ? 'GitHub 실시간 동기화 ✨' : '로컬 지침서';
           showToast(`💎 [${selectedOptionText}] 복사 완료! (${syncLabel})`);
-          geminiSkillCopyBtn.innerHTML = '<span>✅ 복사 완료!</span>';
+          geminiSkillCopyBtn.innerHTML = '<span>✅ 완료</span>';
           setTimeout(() => {
             geminiSkillCopyBtn.innerHTML = origHtml;
             geminiSkillCopyBtn.disabled = false;
