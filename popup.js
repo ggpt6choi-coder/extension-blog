@@ -93,6 +93,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const gemsUserMemo = document.getElementById('gems-user-memo');
   const openTopBlogsBtn = document.getElementById('open-top-blogs-btn');
   const openGeminiBtn = document.getElementById('open-gemini-btn');
+  const geminiSkillSelect = document.getElementById('gemini-skill-select');
+  const geminiSkillCopyBtn = document.getElementById('gemini-skill-copy-btn');
   const keywordPdfSaveBtn = document.getElementById('keyword-pdf-save-btn');
   const keywordPdfSaveSpinner = document.getElementById('keyword-pdf-save-spinner');
   const keywordPdfSaveBtnText = document.getElementById('keyword-pdf-save-btn-text');
@@ -3755,6 +3757,88 @@ ${acText}${memoSection}
   if (openGeminiBtn) {
     openGeminiBtn.addEventListener('click', () => {
       chrome.tabs.create({ url: 'https://gemini.google.com/', active: true });
+    });
+  }
+
+  // 12-2. Gemini Skill Selection & Copy Handler
+  if (geminiSkillSelect) {
+    try {
+      chrome.storage.local.get(['savedGeminiSkill'], (res) => {
+        if (res && res.savedGeminiSkill) {
+          geminiSkillSelect.value = res.savedGeminiSkill;
+        }
+      });
+    } catch (e) {}
+
+    geminiSkillSelect.addEventListener('change', () => {
+      chrome.storage.local.set({ savedGeminiSkill: geminiSkillSelect.value }).catch(() => {});
+    });
+  }
+
+  if (geminiSkillCopyBtn) {
+    geminiSkillCopyBtn.addEventListener('click', async () => {
+      const selectedFile = geminiSkillSelect ? geminiSkillSelect.value : 'blog-food.md';
+      const selectedOptionText = (geminiSkillSelect && geminiSkillSelect.selectedOptions && geminiSkillSelect.selectedOptions[0])
+        ? geminiSkillSelect.selectedOptions[0].textContent.trim()
+        : selectedFile;
+
+      const origHtml = geminiSkillCopyBtn.innerHTML;
+      geminiSkillCopyBtn.disabled = true;
+      geminiSkillCopyBtn.innerHTML = '<span>⏳ 동기화 중...</span>';
+
+      try {
+        let markdownText = '';
+        let isRemoteSynced = false;
+
+        // 1. Try real-time fetch from GitHub Raw (cache-busting query to guarantee latest push)
+        const githubRawUrl = `https://raw.githubusercontent.com/ggpt6choi-coder/extension-blog/main/gemini-skill/${selectedFile}?_t=${Date.now()}`;
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3500); // 3.5s timeout for snappy response
+          const remoteRes = await fetch(githubRawUrl, {
+            cache: 'no-store',
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+
+          if (remoteRes.ok) {
+            markdownText = await remoteRes.text();
+            isRemoteSynced = true;
+          }
+        } catch (netErr) {
+          console.warn('GitHub Raw sync failed, falling back to local file:', netErr);
+        }
+
+        // 2. Fallback to bundled local file if offline or remote fetch failed
+        if (!markdownText) {
+          const localUrl = chrome.runtime.getURL(`gemini-skill/${selectedFile}`);
+          const localRes = await fetch(localUrl);
+          if (!localRes.ok) {
+            throw new Error(`지침서 파일을 불러올 수 없습니다. (${localRes.status})`);
+          }
+          markdownText = await localRes.text();
+        }
+
+        const success = await copyToClipboard(markdownText);
+        if (success) {
+          const syncLabel = isRemoteSynced ? 'GitHub 실시간 동기화 ✨' : '로컬 지침서';
+          showToast(`💎 [${selectedOptionText}] 복사 완료! (${syncLabel})`);
+          geminiSkillCopyBtn.innerHTML = '<span>✅ 복사 완료!</span>';
+          setTimeout(() => {
+            geminiSkillCopyBtn.innerHTML = origHtml;
+            geminiSkillCopyBtn.disabled = false;
+          }, 1500);
+        } else {
+          showToast('클립보드 복사에 실패했습니다.', true);
+          geminiSkillCopyBtn.innerHTML = origHtml;
+          geminiSkillCopyBtn.disabled = false;
+        }
+      } catch (err) {
+        console.error('Gemini skill copy failed:', err);
+        showToast(`지침서 복사 실패: ${err.message || err}`, true);
+        geminiSkillCopyBtn.innerHTML = origHtml;
+        geminiSkillCopyBtn.disabled = false;
+      }
     });
   }
 

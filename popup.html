@@ -1008,6 +1008,34 @@
         <div style="font-size: 10px; color: var(--text-sub); margin-top: 8px; line-height: 1.4; text-align: center;">
           💡 복사 후 Gemini Gems에 <kbd style="background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px;">Ctrl+V</kbd>로 붙여넣으면 즉시 원고 구조가 생성됩니다.
         </div>
+
+        <!-- Divider -->
+        <div style="border-top: 1px dashed rgba(255, 255, 255, 0.12); margin: 12px 0 10px;"></div>
+
+        <!-- Gemini Skill Selection & Copy -->
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+            <label for="gemini-skill-select" style="font-size: 11px; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 4px;">
+              <span>⚡ Gemini 맞춤 지침서(스킬) 복사</span>
+            </label>
+            <span style="font-size: 10px; color: var(--accent-naver, #03c75a); font-weight: 500;">실시간 동기화 ✨</span>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <select id="gemini-skill-select" class="keyword-input" style="flex: 1; padding: 6px 8px; font-size: 11.5px; height: 32px; border-radius: 6px; box-sizing: border-box; cursor: pointer; background: var(--bg-card, #1e2029); color: var(--text-main);">
+              <option value="blog-food.md">🍕 맛집 / 카페 (blog-food)</option>
+              <option value="blog-daily.md">✍️ 일상 / 매일글쓰기 (blog-daily)</option>
+              <option value="blog-accomodation.md">🏨 숙소 / 여행 (blog-accomodation)</option>
+              <option value="blog-new-goods.md">🛍️ 신상 / 제품 리뷰 (blog-new-goods)</option>
+              <option value="blog-popup.md">🎪 팝업 / 전시 (blog-popup)</option>
+              <option value="blog-wedding.md">💍 웨딩 / 결혼준비 (blog-wedding)</option>
+              <option value="blog-keyword.md">🔍 키워드 큐레이터 (blog-keyword)</option>
+            </select>
+            <button class="btn btn-secondary" id="gemini-skill-copy-btn" style="padding: 0 12px; font-size: 11.5px; height: 32px; white-space: nowrap; flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              <span>스킬 복사</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
